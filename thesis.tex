@@ -11,8 +11,12 @@
 \usepackage[cp1251]{inputenc}
 \usepackage[english,russian]{babel}
 \usepackage{enumitem}
-\usepackage{draftwatermark}
+\usepackage{amsmath}
 
+\usepackage{tabularx}
+\usepackage{tikz}
+
+\usepackage{draftwatermark}
 \SetWatermarkLightness{0.95}
 \SetWatermarkScale{3}
 
@@ -62,6 +66,19 @@
   tabsize=2,	                   % sets default tabsize to 2 spaces
   title=\lstname,                   % show the filename of files included with
   basewidth=0.48em, captionpos=b, columns=fixed
+}
+
+\renewcommand\tabularxcolumn[1]{m{#1}}
+\newcolumntype{M}{>{\centering\arraybackslash}m{1.5cm}}
+
+\newcommand\tikzmark[2]{%
+\tikz[remember picture,baseline] \node[inner sep=2pt,outer sep=0] (#1){#2};%
+}
+
+\newcommand\link[2]{%
+\begin{tikzpicture}[remember picture, overlay, >=stealth, shift={(0,0)}]
+  \draw[->] (#1) to (#2);
+\end{tikzpicture}%
 }
 
 \begin{document}
@@ -236,7 +253,7 @@ struct vnodeop_desc {
 \section{Операция mmap: файловый кэш}
 В данной секции будет рассмотрена имплементация $memory-mapped\ файла$ - доступ к файлу как к страницам в виртуальной памяити. У $vnode$ вызываются методы $pagein$ $единожды$ для первого чтения, результат сохраняется в кэше; далее используется скаченная страницы на каждыого последующего побайтового чтениях. Таким образом осуществляется оптимизация доступа к дисковому хранилищу через страницы памяти, организация $readahead$ и $writebehind$ политик.
 
-Для обеспечения такой подгрузки данных файла в страницы, $Mach$ часть ядра $xnu$ предоставляет подсистему кэширования данных файла $UBC$ и подсистему виртуальной памяти $vm\_map$. Это рассмотрение будет необходимо для осуществления фильтрации пустых страниц, см TODO.
+Для обеспечения такой подгрузки данных файла в страницы, $Mach$ часть ядра $xnu$ предоставляет подсистему кэширования данных файла $UBC$ и подсистему виртуальной памяти $vm\_map$. Это рассмотрение будет необходимо для осуществления фильтрации пустых страниц, см \ref{sec:reqresp}.
 
 \subsection{Unified Buffer Cache как часть vnode}
 \label{sec:ubc}
@@ -267,7 +284,7 @@ $UBC$ имеет доступные методы в $KPI$, которые позволяют регулировать кэширование
 
 Тип $memory\_object\_t$ является \emph{обобщенным (unified)} типом для любых обращений к памяти, в том числе к диску, далее \emph{Memory Object}. В $KPI$ $Memory\ Object$ является прозрачным указателем на структуру $memory_object$.
 
-Работа с \emph{Memory Object} подразделена на 2 независимые компоненты, зависящие от источниках данных, $memory\_object$ и $memory\_object\_control$. Поля $mo\_ikot$ оставлены в структуре для поддержки работы  с $UserSpace$ клиентами. В объекте $memory\_object\_control$ поле $moc\_object$ отвечает за выделение памяти в ядре и не зависит от операций над $vnode$. Его более подробное рассмотрения с точки зрения кэширования будет приведено в главе $TODO$. Объект $memory\_object$ является зависимым от источника данных, управление ими осуществляется при помощи аналогинчых коллбэков.
+Работа с \emph{Memory Object} подразделена на 2 независимые компоненты, зависящие от источниках данных, $memory\_object$ и $memory\_object\_control$. Поля $mo\_ikot$ оставлены в структуре для поддержки работы  с $UserSpace$ клиентами. В объекте $memory\_object\_control$ поле $moc\_object$ отвечает за выделение памяти в ядре и не зависит от операций над $vnode$. Объект $memory\_object$ является зависимым от источника данных, управление ими осуществляется при помощи аналогинчых коллбэков.
 
 \begin{lstlisting}[style=CStyle, caption={Структура $memory\_object$}, label=fig:structmemoryobject]
 typedef struct 		memory_object {
@@ -468,11 +485,78 @@ VOPFUNC* get_vop(vnode_t vp)
 
 Для сохранения отладочной информации данные сохраняются не только в регистрах, но и на стеке, поэтому необходимо следить за перемещениями переменной $rdi$ на стеке тоже. Будем обозначать переменные на стеке как $rdp+OFFSET$. Легко увидеть, что используемые переменные будут $rdi$, $rbp+0x18$, $rcx$ (временно), $rbp+0x68$, $rcx$. Искомая инструкция аналогична $release$ случаю. Также заметим, что подтверждающая инструкция требует поддержки загрузки эффективного указателя $lea$, которая используется для загрузки $vnop\_create\_desc$.
 
-Опишем методы использование дизассемблера $distorm3$ для эмуляции функций. Будем хранить 2 массива, индексируемые по регистрам: массив оффсетом копий и массив оффсетов разыменований. Для стека аналогичный аналогичный массив может быть индексирован по сдвигу от $rbp$ по модулю 8 в виду выравнивания.
+Опишем методы использование дизассемблера $distorm3$ для эмуляции функций. Будем называть \emph{уровнем} количество разыменований переменной. Считаем, что поле без разыменований находиться на нулевом уровне.
 
-\textcolor{red}{Вставить пример алгоритма c $mov$, $lea$ и $call$}
+Рассмотрим двумерный массив, индексируемый по регистрам/оффсетам стека и уровню, хранящий оффсет на текущем уровне и оффсет предыдущего уровня. Изначально заполним всю таблицу значением -1, что будет соответствует неиспользованной переменной. 
 
-Подобный способ является более надежным, чем предположение о фиксированности поля $v\_mount$, однако требует эмуляции функции и рассчитывает на ограниченный круг используемых функций $mov$ и $lea$ в данном случае.
+Ассемблерные инструкции производят сдвиги полей в таблице аналогично динамическому программированию. Любые операции, имеющие в качестве цели регистр выставляют -1 в оффсет данного уровня, так как значение регистра перезаписано. Далее для каждого уровня производим сдвиг, зависящий от инструкции, смотреть таблицы \ref{tbl:mov}, \ref{tbl:lea}, \ref{tbl:deref}. Эмуляции останавливается по условию, например вызов функции с параметрами. Пользователь считывает поля таблицы для требуемого регистра и получает оффсет в структуре.
+
+В примерах приняты обозначение оффсетов $\dfrac{A}{B}$, $A$ - текущий уровень, $B$ - предыдущий уровень.
+
+\begin{table}[hhh!]
+\centering
+
+MOV RBX, RDI
+
+\centering
+\begin{tabularx}{.9\textwidth}{M|M|M|M|M|M|M|MX}
+    deref     &$rax$           &$rbx$           &$rcx$    &$rdx$& $rdi$ & $rsi$ & $\cdots$ \\ \cline{1-8}
+    $0$& &\tikzmark{a0}{\textcolor{green}{$\dfrac{18}{8}$}}& & & \tikzmark{di0}{$\dfrac{18}{8}$} & & $\cdots$\\[1em] \cline{1-8}
+    $1$& &\tikzmark{a1}{\textcolor{green}{$\dfrac{28}{0}$}}& & & \tikzmark{di1}{$\dfrac{28}{0}$} & & $\cdots$\\[1em] \cline{1-8}
+    $2$& &\tikzmark{a2}{$\dfrac{-1}{-1}$}& & & \tikzmark{di2}{$\dfrac{-1}{-1}$} & & $\cdots$ \\[1em] \cline{1-8}
+    $3$& &\tikzmark{a3}{$\dfrac{-1}{38}$} & & & \tikzmark{di3}{$\dfrac{-1}{-1}$} & & $\cdots$ \\[1em] 
+\end{tabularx}
+
+\link{di0}{a0}
+\link{di1}{a1}
+
+\vspace{-5mm}\caption{Сдвиги полей при перемещении}
+\label{tbl:mov}
+\end{table}
+
+\begin{table}[hhh!]
+\centering
+
+LEA RBX, [RSI + o]
+
+\centering
+\begin{tabularx}{.9\textwidth}{M|M|M|M|M|M|M|MX}
+    deref     &$rax$           &$rbx$           &$rcx$    &$rdx$& $rdi$ & $rsi$ & $\cdots$ \\ \cline{1-8}
+    $0$& &\tikzmark{a0}{\textcolor{green}{$\dfrac{8+o}{8}$}}& & & & \tikzmark{si0}{$\dfrac{8}{8}$} & $\cdots$ \\[1em] \cline{1-8}
+    $1$& &\tikzmark{a1}{$\dfrac{-1}{0}$}& & & & \tikzmark{si1}{$\dfrac{-1}{18}$}& $\cdots$ \\[1em] \cline{1-8}
+    $2$& &\tikzmark{a2}{$\dfrac{-1}{-1}$}& & & & \tikzmark{si2}{$\dfrac{-1}{-1}$}& $\cdots$ \\[1em] \cline{1-8}
+    $3$& &\tikzmark{a3}{\textcolor{green}{$\dfrac{10+o}{0}$}} & & & & \tikzmark{si3}{$\dfrac{10}{0}$} & $\cdots$ \\[1em] 
+\end{tabularx}
+
+\link{si0}{a0}
+\link{si3}{a3}
+
+\vspace{-5mm}\caption{Сдвиги полей при перемещении с оффсетом}
+\label{tbl:lea}
+\end{table}
+
+\begin{table}[hhh!]
+\centering
+
+MOV RAX, [RDI + o]
+
+\centering
+\begin{tabularx}{.9\textwidth}{M|M|M|M|M|M|M|MX}
+    deref     &$rax$           &$rbx$           &$rcx$    &$rdx$& $rdi$ & $rsi$ & $\cdots$ \\ \cline{1-8}
+    $0$& \tikzmark{a0}{$\dfrac{-1}{8}$} & & & & \tikzmark{si0}{$\dfrac{-1}{8}$} & & $\cdots$ \\[1em] \cline{1-8}
+    $1$& \tikzmark{a1}{$\dfrac{-1}{0}$}& & & & \tikzmark{si1}{$\dfrac{0}{18}$} & & $\cdots$ \\[1em] \cline{1-8}
+    $2$& \tikzmark{a2}{\textcolor{green}{$\dfrac{0}{0 + o}$}}& & & & \tikzmark{si2}{$\dfrac{10}{0}$} & & $\cdots$ \\[1em] \cline{1-8}
+    $3$& \tikzmark{a3}{\textcolor{green}{$\dfrac{0}{10+o}$}}& & & & \tikzmark{si3}{$\dfrac{-1}{-1}$} & & $\cdots$ \\[1em] 
+\end{tabularx}
+
+\link{si1}{a2}
+\link{si2}{a3}
+
+\vspace{-5mm}\caption{Сдвиги полей при разыменовании}
+\label{tbl:deref}
+\end{table}
+
+Подобный способ является более надежным, чем предположение о фиксированности поля $v\_mount$, однако требует эмуляции функции и рассчитывает на ограниченный круг используемых функций $mov$ и $lea$ в данном случае. Расширение поддерживаемых инструкций эмуляции, например обнуление регистра при помощи $xor$, может дать более точные результаты.
 
 \section{KAUTH авторизация}
 \label{sec:kauth}
