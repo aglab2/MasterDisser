@@ -1,0 +1,1266 @@
+\documentclass[master,subf,href,colorlinks=true
+%,times        % шрифт Times как основной
+%,fixint=false % отключить прямые знаки интегралов
+]{disser}
+
+\usepackage[
+  a4paper, mag=1000, includefoot,
+  left=3cm, right=1cm, top=2cm, bottom=2cm, headsep=1cm, footskip=1cm
+]{geometry}
+\usepackage[T2A]{fontenc}
+\usepackage[cp1251]{inputenc}
+\usepackage[english,russian]{babel}
+\usepackage{enumitem}
+\usepackage{draftwatermark}
+
+\SetWatermarkLightness{0.95}
+\SetWatermarkScale{3}
+
+\ifpdf\usepackage{epstopdf}\fi
+
+% Номера страниц сверху и по центру
+%\def\headfont{\small}
+%\pagestyle{headcenter}
+%\chapterpagestyle{empty}
+
+% Точка с запятой в качестве разделителя между номерами цитирований
+%\setcitestyle{semicolon}
+
+% Использовать полужирное начертание для векторов
+\let\vec=\mathbf
+
+% Включать подсекции в оглавление
+\setcounter{tocdepth}{2}
+
+\graphicspath{{fig/}}
+
+\usepackage{xcolor}
+\usepackage{listings}
+
+\definecolor{mygreen}{rgb}{0,0.6,0}
+\definecolor{mygray}{rgb}{0.5,0.5,0.5}
+\definecolor{mymauve}{rgb}{0.58,0,0.82}
+
+\lstdefinestyle{CStyle}{
+  backgroundcolor=\color{white},   % choose the background color; you must add \usepackage{color} or \usepackage{xcolor}; should come as last argument
+  basicstyle=\ttfamily,            % the size of the fonts that are used for the code
+  breakatwhitespace=false,         % sets if automatic breaks should only happen at whitespace
+  breaklines=true,                 % sets automatic line breaking
+  commentstyle=\color{mygreen},    % comment style
+  deletekeywords={...},            % if you want to delete keywords from the given language
+  escapeinside={\%*}{*)},          % if you want to add LaTeX within your code
+  extendedchars=true,              % lets you use non-ASCII characters; for 8-bits encodings only, does not work with UTF-8
+  keepspaces=true,                 % keeps spaces in text, useful for keeping indentation of code (possibly needs columns=flexible)
+  keywordstyle=\color{blue},       % keyword style
+  language=C++,                    % the language of the code
+  morekeywords={*,...},            % if you want to add more keywords to the set
+  showspaces=false,                % show spaces everywhere adding particular underscores; it overrides 'showstringspaces'
+  showstringspaces=false,          % underline spaces within strings only
+  showtabs=false,                  % show tabs within strings adding particular underscores
+  stepnumber=1,                    % the step between two line-numbers. If it's 1, each line will be numbered
+  stringstyle=\color{mymauve},     % string literal style
+  tabsize=2,	                   % sets default tabsize to 2 spaces
+  title=\lstname,                   % show the filename of files included with
+  basewidth=0.48em, captionpos=b, columns=fixed
+}
+
+\begin{document}
+
+\institution{Московский Физико-Технический Институт (ГУ)}
+
+% Имя лица, допускающего к защите (зав. кафедрой)
+\apname{Тормасов Александр Геннадьевич}
+
+\title{ДИССЕРТАЦИЯ\\[-14pt]на соискание ученой степени\\МАГИСТРА}
+
+\topic{Перехват файловых операций для создания виртуальных sparse-файлов с удаленным хранилищем в операционной системе macOS}
+
+% Автор
+\author       {Копырин Денис Валерьевич} % ФИО
+\group        {376} % Группа
+\coursenum    {03.04.01} % Номер направления
+\course       {Прикладные математика и физика}
+\masterprognum{111111} % Номер магистерской программы
+\masterprog   {Название программы}
+
+% Научный руководитель
+\sa      {Костюшко Алексей}
+\sastatus{д.~ф.-м.~н., ст.~н.~с.}
+% Второй научный руководитель
+%\sasnd      {ФИО руководителя}
+%\sasndstatus{д.~ф.-м.~н., ст.~н.~с.}
+
+% Рецензент
+%\rev      {ФИО рецензента}
+%\revstatus{д.~ф.-м.~н., в.~н.~с.}
+% Второй рецензент
+%\revsnd      {ФИО рецензента}
+%\revsndstatus{д.~т.~н., ст.~н.~с.}
+
+% Консультант
+\con{Додь Алексей}
+\conspec{}
+\constatus{к.~т.~н., доц.}
+
+% Город и год
+\city{Москва}
+\date{\number\year}
+
+\maketitle
+
+\tableofcontents
+
+\intro
+В данной работе рассматривается способ работы с файлами, находящимися на удаленном хранилище, доступ к которым требуется осуществлять при помощи локальных средств работы с файлами (POSIX API). Подобная задачи появляется при синхронизации пользовательских изменений с облаком, а также при работе с общими файлами многими пользователями.
+
+Сформулируем задачу в виде требований к продукту.
+\begin{enumerate}
+\item Стриминг - возможность поблочного скачивания файла
+\item Консистентность - после скачивания части файла, данные должны быть кэшированы локально 
+\end{enumerate}
+
+Классическое решение данной проблемы подразумевает использование виртуальной файловой системы таких как $smbfs$ или $nfs$ и их монтирование в папку - новый корень файловой системы. Такой подход удовлетворяет первому свойству, однако для обеспечения сохранения данных необходимо производить существенные изменения в протокол или добавлять новый уровень абстракции персистентного кэша.
+
+В дипломе будет рассмотрено другое решение, не требуещее создания искусственной файловой системы, для работы достаточно загрузки расширения ядра операционной системы macOS, \emph{Kernel Extension (kext)}. В системе будут создаваться \emph{обычные} sparse-файлы, не хранящие по умолчанию данных, а $kext$ будет скачивать данные на операции чтения. Такой подход будет удовлетворять требованию 1 и 2.
+
+\chapter{Файловые операции}
+
+\section{Файловая Система}
+\label{sec:vfs}
+\emph{Виртуальная Файловая Система (Virtual File System/VFS)} - подсистема, которая отвечает за работу с различными \emph{Файловыми Системами(ФС/FS)} и находится между специфичной для FS и независимой от FS кодом, таким образом абстрагируя любые различия между внутренним устройством FS и остальной частью ядра. Ядро использует VFS для осуществления \emph{ввода/вывода(I/O)} через \emph{vnode}, которые являются обобщением файла в ядре и хранилищем метаданных.
+
+Рассмотрим принципиальную схему работы VFS. В данной работе не интересует схема регистрации новых устройств, но сама работа VFS по созданию и удалению новых vnode, а также передача данных от слоя к слою.
+
+\begin{figure}[hhhhh!]
+\begin{center}
+\includegraphics[width=13.1cm]{fig/fd.png}
+\end{center}
+\vspace{-5mm}\caption{Принципиальная схема работы VFS.}
+\label{fig:VFSScheme}
+\end{figure}
+
+Рассмотрим \ref{fig:VFSScheme}. Каждая файловая система имеет в себе \emph{единственный экземпляр} таблицы \emph{vnops}, которая отвечает за работу с конкретной файловой системой.  Приложение в UserSpace работает с файловыми дескрипторами (fd1-fd3 на рисунке), через которые производится доступ к vnode в VFS. Операции над файлами транслируется в один из вызовов VFS, который использует соответствующую функцию из таблицы vnops.
+
+\section{Структура vnode}
+\label{sec:vnodeinfo}
+vnode в системе может представлять из себя множество различных данных, как хранимых локально на диске, так и в памяти. Ограничим круг рассматриваемых vnode.
+
+В таблице \ref{fig:vnodetype} перечислены возможные типы vnode в операционной системе macOS. Несмотря на некоторое сходство с FreeBSD, ядро XNU имеет некоторые отличия.
+
+\begin{figure}[hhh!]
+\begin{center}
+\begin{tabular}{|c|c|}
+\hline
+	VREG; VDIR & Регулярный (обычный) файл; Директория \\
+\hline
+	VBLK; VCHR & Блочное/Символьное устройство \\
+\hline
+	VLNK & Символическая ссылка на файл \\
+\hline
+	VSOCK; VFIFO & Сокет/Именованный pipe \\
+\hline
+	VSTR; VCPLX & Специальные типы \\
+\hline
+\end{tabular}
+\end{center}
+\vspace{-5mm}\caption{Типы vnode в VFS.}
+\label{fig:vnodetype}
+\end{figure}
+
+Для нашего рассмотрения ограничимся VREG и VDIR, однако можно включить в рассмотрение и VSTR, которые могут иметь под собой хранимые данные. 
+
+Структура данных, которая представляет собой vnode представлена в \ref{fig:structvnode}. Из определения удалены поля, которые не нужны для дальнейшего рассмотрения. Заметим, что данная структура также не является постоянной и меняется от версии к версии в macOS. Представленная версия в данной работе представлены в ядре xnu-4903.221.2 \cite{xnu}, предложенные методы были протестированы на версии macOS до 10.10 включительно.
+
+\begin{lstlisting}[style=CStyle,caption={Структура vnode в ядре, краткое содержание}, label=fig:structvnode]
+typedef struct vnode {
+...
+  int32_t v_kusecount;            /* count of in-kernel refs */
+  int32_t v_usecount;             /* reference count of users */
+  int32_t v_iocount;              /* iocounters */
+...
+  uint32_t v_id;                  /* identity of vnode contents */
+  union {
+    struct mount    *vu_mountedhere; /* ptr to mounted vfs (VDIR) */
+    struct ubc_info *vu_ubcinfo;     /* valid for (VREG) */
+  } v_un;
+...
+  int (**v_op)(void *);            /* vnode operations vector */
+  mount_t v_mount;                 /* ptr to vfs we are in */
+  void* v_data;                   /* private data for fs */
+} *vnode_t;
+\end{lstlisting}
+
+
+У $vnode$ существуют два счетчика, которые отвечают за время жизни $vnode$ в памяти. $usecount$ - счетчик, который обеспечивает слабое наличие $vnode$ в системе, $vnode$ с положительным $usecount$ не может быть переиспользована для другого файла. Слабое наличие файла не гарантирует наличие данных, если файловая система должна быть отмонтирована, $vnode$ может быть прописано состояние VNON и данные $vnode$ не могут быть больше использованы. $iocount$ гарантирует, что $vnode$ не только обязана соответствовать файлу, но и запрещено отмонтирование ФС пока $iocount$ не будет равен 0. Отсюда требование VFS заключается в том, что $iocount$ на $vnode$ может быть взят только на короткое время операций, например, чтения или запись блока данных. Kext обязан опускать $iocount$ как только операции закончились, в противном случае система не может быть остановлена валидно.
+Для проверки переиспользования $vnode$ используется $v_id$, уникальный для данной vnode как указателя id, при изменении содержимого $vnode$ счетчик поднимается.
+
+$v\_mount$ и $v\_data$ отвечают за $mount$, к которому относится данная $vnode$ и для kext являются непрозрачными(opaque) указателями. В данной работе особый интерес составляет поле $v\_op$, которое отвечает за доступ к функциям работы с $vnode$, принадлежащей к ядру. Как уже было замечено раньше, указатель $v\_op$ является постоянным для всех $vnode$ принадлежащих одной файловой системе. Для всех версия ядра от macOS 10.10 до macOS 10.14 сохраняется свойство последовательности полей $v\_op \rightarrow v\_mount \rightarrow v\_data$, которое может быть использовано для нахождения оффсета $v\_op$ в памяти. Более подробно поле $v\_op$ изучено в главе \ref{sec:vop}.
+
+В объединении $v\_un$ находятся указатели, являющиеся прозрачными для $vnode$. Содержимое указателя зависит от типа $vnode$, в данном дипломе будет рассмотрено содержимое указателя $vu\_ubcinfo$, которое отвечает за кэширование данных $vnode$, смотреть \ref{sec:ubc}.
+
+\section{Операции над vnode}
+\label{sec:vop}
+Рассмотрим функция $VNOP\_READ$, которая осуществляет чтение из файла. Остальное функции вида $VNOP\_*$ работают аналогично. В листинге \ref{fig:vnopfunc} представлена упрощенная функция \cite{xnu}.
+
+Обратим внимание, что для доступа к операции в функции используется структура $vnop\_read\_desc$, ее сокращенное описание приведено в \ref{fig:vnodeopdesc}.
+
+\begin{lstlisting}[style=CStyle, caption={Упрощенная функция $VNOP\_READ$}, label=fig:vnopfunc]
+errno_t VNOP_READ(...args...)
+{
+  int _err;
+  struct vnop_read_args a;
+
+  a.a_desc = &vnop_read_desc;
+  a.a_vp = vp;
+  ...other inits...
+
+  _err = (*vp->v_op[vnop_read_desc.vdesc_offset])(&a);
+
+  return (_err);
+}
+\end{lstlisting}
+
+\begin{lstlisting}[style=CStyle, caption={Структура $vnodeop\_desc$}, label=fig:vnodeopdesc]
+struct vnodeop_desc {
+  int	vdesc_offset;       /* offset in vector */
+  const char *vdesc_name; /* a readable name for debugging */
+  int	vdesc_flags;        /* VDESC_* flags */
+
+  int	*vdesc_vp_offsets;  /* list ended by VDESC_NO_OFFSET */
+  int	vdesc_vpp_offset;   /* return vpp location */
+...
+};
+\end{lstlisting}
+
+Видно, что используя соответствующую структуру вида $vnop\_func\_desc$, где $func$ является именем необходимой структуры, можно найти смещение в таблице функций $v\_op$. Таким образом, для того чтобы переопределить операцию над $vnode$ необходимо подменить функцию в таблице $v\_op$ найденную через структуру $vnop\_func\_desc$.
+
+\section{Unified Buffer Cache}
+\label{sec:ubc}
+$Unified\ Buffer\ Cache(UBC)$ - способ кэширования данных $vnode$ для доступа к ним через страницы в памяти $(memory-mapped\ file,\ mmap)$. У $vnode$ вызываются методы $pagein$ $единожды$ для первого чтения, результат сохраняется в $UBC$ и далее при работе не используется. Таким образом осуществляется оптимизация доступа к дисковому хранилищу через страницы памяти.
+
+При открытии $vnode$ осуществляется аллокация структуры $vu\_ubcinfo$ (\ref{fig:structvnode}). В \ref{fig:structubc} приведено описание данной полей \cite{xnu}.
+
+\begin{lstlisting}[style=CStyle, caption={Структура $ubc\_info$}, label=fig:structubc]
+typedef struct ubc_info {
+  memory_object_t ui_pager;	          /* pager */
+  memory_object_control_t ui_control; /* VM control for the pager */
+ 
+  vnode_t ui_vnode;	     /* vnode for this ubc_info */
+  kauth_cred_t ui_ucred; /* holds credentials for NFS paging */
+  off_t ui_size;         /* file size for the vnode */
+  uint32_t ui_flags;     /* flags */
+  uint32_t cs_add_gen;   /* generation count when
+                            csblob was validated */
+  ...
+} *ubc_info_t;
+\end{lstlisting}
+
+$UBC$ имеет открытые методы в $KPI$, которые позволяют регулировать кэширование. Самый важный метод является $ubc\_msync$, отправка всех "грязных" страниц на диск. Если кэш был умышленно заполнен неверными страницами, то при помощи $ubc\_msync$ можно сделать кэш снова валидным. Стоит заметить, что при таком подходе, количество операций чтения с диска становится порядка $O(n^2)$ в виду того, что каждое чтения байта порождает чтение всей страницы. Отсюда при чтении страницы, с диска будет считано $pagesize^2$ байт.
+
+Часть $UBC$, отвечающая за работу с памятью, находится в Mach части ядра, а именно в полях $ui\_pager$ и $ui\_control$. При помощи операций над файлом $pagein$ и $pageout$ осуществляется чтения и запись файла на диска с использованием указанных полей.
+
+\section{Memory Objects, per vnode data}
+\label{sec:memobject}
+\textcolor{red}{Секция не используется, переделать в XAttr + перенести информацию из главы 4 с оставлением структуры memory object}.
+
+Реализация VFS в операционной системе macOS очень близка к FreeBSD, но существует множество изменений, связанных в первую очередь с наличием подсистемы Mach, отвечающей за работу с памятью.
+
+Тип $memory\_object\_t$ является \emph{обобщенным (unified)} типом для любых обращений к памяти, в том числе к диску, далее \emph{Memory Object}. В $KPI$ $Memory Object$ является прозрачным указателем на структуру $memory_object$.
+
+Работа с \emph{Memory Object} подразделена на 2 независимые компоненты, зависящие от источниках данных, $memory\_object$ и независимого $memory\_object\_control$. Поля $mo\_ikot$ оставлены в структуре для поддержки работы  с $UserSpace$ клиентами. В объекте $memory\_object\_control$ поле $moc\_object$ отвечает за выделение памяти в ядре и не зависит от операций над $vnode$. Его более подробное рассмотрения с точки зрения кэширования будет приведено в главе $TODO$. Объект $memory\_object$ является зависимым от источника данных, управление им осуществляется при помощи коллбэков $mo\_pager\_ops$.
+
+\begin{lstlisting}[style=CStyle, caption={Структура $memory\_object$}, label=fig:structmemoryobject]
+typedef struct 		memory_object {
+  mo_ipc_object_bits_t			mo_ikot;
+  const struct memory_object_pager_ops *mo_pager_ops;
+  struct memory_object_control *mo_control;
+} *memory_object_t;
+
+typedef struct memory_object_control {
+  mo_ipc_object_bits_t moc_ikot;
+  struct vm_object *moc_object;
+} *memory_object_control_t;
+\end{lstlisting}
+
+Для данной работы, достаточно рассмотреть структуру, отвечающую за получения данных их $vnode$ - $vnode\_pager$. Заметим, что у структура присутствует заголовок, отвечающий за общую для всех \emph{Memory Object} и частный для самого $vnode\_pager$ указатель на $vnode$. Отсюда в $ubc\_info$ можно уточнить описание использовать $ui\_pager$ с типом $struct\ vnode\_pager*$, но система не дает гарантии, что \emph{Memory Object} будет именно $vnode\_pager$. Поэтому можно создать искусственный \emph{Memory Object}, который будет использовать в качестве заголовка $vnode\_pager$, и подменить коллбэки их $passthrough$ вариантами.
+
+\begin{lstlisting}[style=CStyle, caption={Структура $vnode\_pager$}, label=fig:structvnodepager]
+typedef struct vnode_pager {
+  /* mandatory generic header */
+  struct memory_object vn_pgr_hdr;
+
+  /*  pager-specific */
+  unsigned int		ref_count;      /* reference count */
+  struct vnode		*vnode_handle;  /* vnode handle */
+} *vnode_pager_t;
+\end{lstlisting}
+
+Заметим, что для обеспечения безопасного доступа в заголовке структуры \ref{fig:structvnodepager} оставлены поля из оригинального $vnode\_pager$ с подмененными коллбэками. Для освобождения оригинальных данных и для отгрузки оставлены указатели на оригинальный объект $vnode\_pager$ и операции над ним $pager\_ops$. Данные per vnode хранятся в $my\_data$ и могут быть получены по цепочке разыменований $vnode \rightarrow vu\_ubcinfo \rightarrow ui\_pager \rightarrow my\_data$.
+
+\begin{lstlisting}[style=CStyle, caption={Искусственная структура $vnode\_pager$}, label=fig:structmyvnodepager]
+typedef struct my_vnode_pager {
+  /* generic header with switched callbacks */
+  struct vnode_pager header;
+  
+  /* passthrough required fields */
+  vnode_pager_t* orig_vnode_pager;
+  
+  struct data my_data;
+} *my_vnode_pager_t;
+\end{lstlisting}
+
+Пример функции, осуществляющую вставку данных, приведена в \ref{fig:funcvnodedatainject}. $ALLOC$ может быть любая функция для аллокации данных, например $zalloc$, $kalloc$, $IOMalloc$ и т.п. Соответствующая $ALLOC$ функция $FREE$ должная освобождать данные: $zfree$, $kfree$, $IOFree$. $CAS$ - функция для осуществления атомарной операции \emph{Compare and Swap}, проверить на равенство старые данные по указателю и заменить новыми:  $OSAtomicCompareAndSwap$. Проверки на нулевые указатели опущены.
+
+\begin{lstlisting}[style=CStyle, caption={Инъекция $my\_data$ в $vnode$}, label=fig:funcvnodedatainject]
+void inject_data(vnode_t vp)
+{
+  ubc_info_t ubc = vp->vu_ubcinfo;
+  // Check if vnode was injected already
+  if (ubc->ui_pager->vn_pgr_hdr.mo_pager_ops == my_ops)
+    return;
+
+  // Allocate new pager and CAS it in
+  my_vnode_pager_t my_pager = ALLOC(pager);
+  do
+  {
+    vnode_pager_t orig_pager = ubc->ui_pager;
+    *my_pager = {
+      header = *orig_pager,
+      header.vn_pgr_hdr.mo_pager_ops = my_ops,
+      orig_pager_ops = orig_pager.vn_pgr_hdr.mo_pager_ops,
+    };
+  }
+  while(!CAS(orig_pager, my_pager, ubc->ui_pager));
+}
+\end{lstlisting}
+
+Коллбэки $my\_ops$ должны перенаправлять ($passthrough$) все вызовы к новому \emph{Memory Object} и производить корректное освобождение данных. Обратим внимание, что оригинальные функции вида $vnode\_pager\_FUNC$ вызывают $vnode\_pager\_lookup$, который проверяют валидность указателя $mo\_pager\_ops$ (\ref{fig:vnodepagerlookup}). Отсюда следует необходимость сохранять указатель на оригинальный $vnode\_pager$ и запрет на изменение его данных. Примеры коллбэков $my\_ops$ приведены в \ref{fig:funcpassthrough}.
+
+\begin{lstlisting}[style=CStyle, caption={Проверка на валидность в $vnode\_pager\_lookup$}, label=fig:vnodepagerlookup]
+vnode_pager_t vnode_pager_lookup(memory_object_t mem_obj)
+{
+  vnode_pager_t	vnode_object = (vnode_pager_t)name;
+  assert(vnode_object->vn_pgr_hdr.mo_pager_ops == &vnode_pager_ops);
+  return (vnode_object);
+}
+\end{lstlisting}
+
+\begin{lstlisting}[style=CStyle, caption={Пример $Passthrough$ функции в $my\_ops$}, label=fig:funcpassthrough]
+template<typename... T>
+void my_vnode_pager_FUNC(memory_object_t mem_obj, T... t)
+{
+  my_vnode_pager_t my_pager = (my_vnode_pager_t my_pager) mem_obj;
+  vnode_pager_t pager = my_pager->orig_vnode_pager;
+  return pager->vn_pgr_hdr.mo_pager_ops->FUNC(mem_obj, t...);
+}
+
+void vnode_pager_deallocate(memory_object_t mem_obj)
+{
+  my_vnode_pager_t my_pager = (my_vnode_pager_t my_pager) mem_obj;
+  vnode_pager_t pager = my_pager->orig_vnode_pager;
+  pager->vn_pgr_hdr.mo_pager_ops->deallocate(mem_obj);
+  FREE(mem_obj);
+}
+\end{lstlisting}
+
+\chapter{Перехват VFS операций}
+\label{sec:genhook}
+
+\section{Описание перехватов}
+\label{sec:hook}
+\emph{Перехват/Перенаправление (Hook, Interception)} - способ вставки собственного кода до и после вызова функции. Псевдокод представлен на рисунке \ref{fig:pseudohook}. Заметим, что в данном примере функция $BEFORE$ может осуществлять фильтрацию вызова оригинальной функции при возврате ненулевого значения. Такой подход может понадобиться при блокировании доступа к файлу и возвращения $EPERM$ на открытии.
+
+\begin{lstlisting}[style=CStyle, caption={Псевдокод перехвата}, label=fig:pseudohook]
+int HOOK_FUNC(params)
+{
+  int ret = 0;
+  ret = BEFORE(params);
+  if (!ret)
+    int ret = ORIGINAL(params);
+
+  AFTER(params, ret);
+  return ret;
+}
+\end{lstlisting}
+
+\section{Vnode перехваты}
+\label{sec:vnodehoook}
+
+\subsection{Способы перехвата}
+\label{sec:vnodelevel}
+Для создания файлов с виртуальным хранилищем нужны перехваты многих $VNOP$ функций у $vnode$. Рассмотрим возможные варианты вставки $hook$ функции в $VNOP$ функцию и их сравнение в таблице \ref{fig:hooklevels}.
+
+\begin{figure}[hhh!]
+\begin{center}
+\begin{tabular}{|c||c|c|}
+\hline
+	Сравнение & $v\_op$ in $vnode$ & $func$ in $mount$ $v\_op$ \\
+\hline
+	Перезаписи & $O(vnode)$ & $O(mount * func)$ \\
+\hline
+	Аллокации & $O(mount * v\_op)$ & $O(1)$ \\
+\hline
+	Защита & отсутствует & Read Only \\
+\hline
+	Производительность & перехват нужных $vnode$ & перехват всех $vnode$ \\
+\hline
+	
+\end{tabular}
+\end{center}
+\vspace{-5mm}\caption{Таблица способов перехвата}
+\label{fig:hooklevels}
+\end{figure}
+
+В таблице приведено 2 вида перехватов: перезапись всей таблицы $v\_op$ в нужной $vnode$ и перезапись необходимой функции $VNOP$ в таблице, хранящейся в $mount$.
+
+Перезапись всей таблицы требует создание \emph{полной копии} $v\_op$ и последующей вставки нового указателя во \emph{каждую нужную} $vnode$. В копии $v\_op$ производится подмена указателей необходимых функций на $hook$. В альтернативном варианте $hook$ вставляется непосредственно в таблицу, что не требует аллокации данных, но таблица в $mount$ является защищенной с правами $Read Only$ как статические данные в $kext$, отвечающий за работу с $FS$.
+
+При перезаписи $v\_op$ только в нужных $vnode$ можно обеспечить лучшую гранулярность и производительность. В случае с перезаписью всей функции в таблице, необходимо производить фильтрацию операций для $vnode$, наблюдение за которыми не нужно. Подобную фильтрацию возможно осуществить при помощи $hashtable$ в $kext$ или \emph{per vnode хранилища}, описанного в \ref{sec:memobject}.
+
+Прямая запись в таблицу требует аккуратной работы при отгрузке $kext$. Драйвер, который имеет в себе необходимую таблицу может быть отгружен и указатели в его статические данные будет некорректным. В первом варианте подобная проблема не может возникнуть, так как память таблицы принадлежит $kext$, который осуществляет подмену указателей и при отгрузке достаточно пройти по всем $vnode$ и произвести обратную запись оригинального указателя. Однако, при подмене $v\_op$ в $vnode$ нужно следить за временем жизни $vnode$, при переиспользовании нужно восстановить оригинальный указатель на таблицу.
+
+Последнее замечания накладывает существенные ограничения на второй вариант $hook$, поэтому  в этой работе будет использована перезапись $v\_op$ в $vnode$, но с помощью дополнительных проверок можно использовать и второй вариант.
+
+\subsection{Поиск полей vnode}
+\label{sec:kauth}
+Поля структуры $struct vnode$ не являются открытыми в $KPI$, так как поля $vnode$ могут изменяться при смене версии ядра, но расширения ядра $XNU$ должны работать на любой версии системы. Поэтому в $KPI$ существуют обертки над полями структуры, такие как $vnode\_parent$ для получения $v\_parent$, $vnode\_tag$ для получения $v_tag$, $vnode\_setparent$ для записи в $v\_parent$ и т.п. Не ко всем полям структуры есть доступ через $KPI$, в частности невозможно получить доступ к полю $v\_op$. В этой секции будут рассмотрены способы нахождения оффсета $v\_op$ в структуре $struct\ vnode$.
+
+Рассмотрим сначала простой вариант. В приватной структуре $struct\ vnode$ (\ref{fig:structvnode}) можно увидеть, что поля $v\_op$ и $v\_mount$ находятся на расстоянии 8 байт. Поле $v\_mount$ можно получить через функцию в $KPI$ $vnode\_mount$. Производим поиск значения, которое возвращается в функции $vnode\_mount$ и находим оффсет в структуре. Далее вычитаем из сдвига 8 и получаем итоговый оффсет поля $v\_op$. Пример функции, делающий поиск приведен в \ref{fig:mountvop}. 
+
+Заметим, что такое расположение полей в структуре $vnode$ не является гарантированным и может измениться в следующих версиях системы.
+
+\begin{lstlisting}[style=CStyle, caption={Нахождения оффсета поля $v\_op$}, label=fig:mountvop]
+// Requires fixed struct vnode
+  ...
+  int (**v_op)(void*);
+  mount_t v_mount;
+  ...
+
+int find_vop_offset(vnode_t vp)
+{
+  void* needle = vnode_mount(vp);
+  void** haystack = (void**) vp;
+  int i;
+  for (i = 0; ; i++)
+  {
+    if (haystack[i] == needle)
+      break;
+  }
+  
+  return (i - 1) * sizeof(void*);
+}
+
+VOPFUNC* get_vop(vnode_t vp)
+{
+  return (VOPFUNC*)((char*)vp + find_vop_offset(vp));
+}
+\end{lstlisting}
+
+\subsection{Нахождение оффсетов при помощи дизассемблера}
+
+Более надежный способ нахождения оффсетов полей в структуре - использование динамического дизассемблера в ядре, например distorm3. Для этого рассматривается скомпилированный код функции, осуществляющей доступ к нужному полю через операции разыменования, такие как $mov...$ и $lea$. Будем такой парсинг функции называть \emph{эмуляцией}.
+
+Рассмотрим скомпилированный код функции $VNOP\_CREATE$ в различных вариантах ядра $xnu$. В $release\ 10.14.2$ версии $amd64$ код ассемблера приведен в листинге \ref{fig:vopdisasrel}.
+
+\begin{lstlisting}[style=CStyle, caption={Дизассемблированный код $VNOP\_CREATE$, $release$ версия ядра}, label=fig:vopdisasrel]
+ mov     rbp, rsp
+ push    rbp
+ ...
+ push    rbx
+ sub     rsp, 48h
+ lea     rax, __stack_chk_guard
+ mov     rax, [rax]
+ mov     [rbp+__dtrace_args], rax
+ mov     r15, r8
+ mov     r12, rdx
+ mov     rbx, rsi
+ mov     r13, rdi
+ lea     rax, vnop_create_desc kernels
+ mov     [rbp+var_70], rax
+ mov     [rbp+var_68], r13
+ mov     [rbp+var_60], rbx
+ mov     [rbp+var_58], r12
+ mov     [rbp+var_50], rcx
+ mov     [rbp+var_48], r15
+ mov     rax, [r13+0xD0]
+ movsxd  rcx, cs:vnop_create_desc.vdesc_offset
+ lea     rdi, [rbp+var_7]
+ call    qword ptr [rax+rcx*8]
+\end{lstlisting}
+
+Функций $VNOP\_CREATE$ получает информацию о таблице $v\_op$ через первый аргумент функции $dvp$. В соглашении о вызовах \emph{System V AMD64 ABI} принято передавать первый аргумент через параметр $rdi$. Будем следить за регистрами в которые будет перемещено значение $rdi$. Легко увидеть, что такими регистрами являются только $r13$ и $rdi$. Далее для получения значения $v\_op$ используется инструкция mov rax, [r13+0xD0] и искомое значения смещения является 0xD0. Отсюда требуется найти инструкцию вида mov REG0, [REG1+OFFSET], где REG1 - регистр, за которым производится наблюдение. Далее по коду можно увидеть вызов функции $create$ из таблицы call qword ptr [rax+rcx*8], что является подтверждением корректности.
+
+Теперь рассмотрим ту же функцию $VNOP\_CREATE$ в ядре $debug\ 10.13.6$. $Debug$ версии $xnu$ имеют существенное большее число проверок и являются менее оптимизированными, но подобный код упрощает отладку ядра с символами. Листинг приведен в \ref{fig:vopdisasdebug}.
+
+\begin{lstlisting}[style=CStyle, caption={Дизассемблированный код $VNOP\_CREATE$, $debug$ версия ядра}, label=fig:vopdisasdebug]
+ push    rbp
+ mov     rbp, rsp
+ sub     rsp, 80h
+ lea     rax, [rbp+var_70]
+ lea     r9, _vnop_create_desc
+ lea     r10, ___stack_chk_guard
+ mov     r10, [r10]
+ mov     [rbp+var_8], r10
+ mov     [rbp+var_18], rdi
+ mov     [rbp+var_20], rsi
+ mov     [rbp+var_28], rdx
+ mov     [rbp+var_30], rcx
+ mov     [rbp+var_38], r8
+ mov     [rbp+var_70], r9
+ mov     rcx, [rbp+var_18]
+ mov     [rbp+var_68], rcx
+ mov     rcx, [rbp+var_20]
+ mov     [rbp+var_60], rcx
+ mov     rcx, [rbp+var_28]
+ mov     [rbp+var_58], rcx
+ mov     rcx, [rbp+var_30]
+ mov     [rbp+var_50], rcx
+ mov     rcx, [rbp+var_38]
+ mov     [rbp+var_48], rcx
+ mov     rcx, [rbp+var_18]
+ mov     rcx, [rcx+0D0h]
+ movsxd  rdx, dword ptr [r9]
+ mov     rcx, [rcx+rdx*8]
+ call    rcx
+\end{lstlisting}
+
+Для сохранения отладочной информации данные сохраняются не только в регистрах, но и на стеке, поэтому необходимо следить за перемещениями переменной $rdi$ на стеке тоже. Будем обозначать переменные на стеке как $rdp+OFFSET$. Легко увидеть, что используемые переменные будут $rdi$, $rbp+0x18$, $rcx$ (временно), $rbp+0x68$, $rcx$. Искомая инструкция аналогична $release$ случаю. Также заметим, что подтверждающая инструкция требует поддержки загрузки эффективного указателя $lea$, которая используется для загрузки $vnop\_create\_desc$.
+
+Опишем методы использование дизассемблера $distorm3$ для эмуляции функций. Будем хранить 2 массива, индексируемые по регистрам: массив оффсетом копий и массив оффсетов разыменований. Для стека аналогичный аналогичный массив может быть индексирован по сдвигу от $rbp$ по модулю 8 в виду выравнивания.
+
+\textcolor{red}{Вставить пример алгоритма c $mov$, $lea$ и $call$}
+
+Подобный способ является более надежным, чем предположение о фиксированности поля $v\_mount$, однако требует эмуляции функции и рассчитывает на ограниченный круг используемых функций $mov$ и $lea$ в данном случае.
+
+\section{KAUTH авторизация}
+\label{sec:kauth}
+$KAUTH$ авторизация позволяет $kext$ ограничивать доступ в определенным $vnode$ в системе, осуществлять мониторинг операций, происходящих в системе и, существенно для данной работы, получать первичные сведения о $vnode$ в системе. \cite{kauth}
+
+$KAUTH$ предоставляет слушателям ($listener$) области ($scope$) наблюдения, в которых функции ядра отправляют запросы на авторизацию события. Клиент для принятия решения получает $vnode$, полномочия ($credentials$) и действие ($action$). $Credentials$ позволяют получить информацию о $UserSpace$ приложении, производящем действие. Функция авторизации $listener$ возвращает одно из трех решений, перечисленных в таблице \ref{fig:kauthresult}, префикс опущен.
+
+\begin{figure}[hhh!]
+\begin{center}
+\begin{tabular}{|c|c|}
+\hline
+	DEFER & Решение не принято, передать следующему $listener$ \\
+\hline
+	ALLOW & Разрешить операцию, других $listener$ не вызывать \\
+\hline
+	DENY & Запретить операцию, других $listener$ не вызывать \\
+\hline
+\end{tabular}
+\end{center}
+\vspace{-5mm}\caption{Коды возврата $listener$}
+\label{fig:kauthresult}
+\end{figure}
+
+Функции регистрации на событие и обработчика событий $listener$ описаны в \ref{fig:kauthreg}.
+
+\begin{lstlisting}[style=CStyle, caption={Функции регистрации $KAUTH$}, label=fig:kauthreg]
+// Register for events from scope
+kauth_listener_t kauth_listen_scope(
+                   const char* identifier,
+                   kauth_scope_callback_t callback,
+                   void* idata);
+                                      
+// Unregister listener from events
+void kauth_unlisten_scope(
+                   kauth_listener_t listener);
+
+typedef int (*kauth_scope_callback_t)(
+    kauth_scope_t  scope, 
+    kauth_cred_t   credential, 
+    kauth_action_t action,
+    uintptr_t      arg0, 
+    uintptr_t      arg1, 
+    uintptr_t      arg2, 
+    uintptr_t      arg3
+);
+\end{lstlisting}
+
+Ядро $XNU$ предоставляет два стандартных $scope$ для работы с файлами: $FileOp$ $scope$ и $Vnode$ $scope$. $FileOp$ формально не является областью наблюдения для авторизации, но только предоставляет сведения об операциях, происходящих в системе. $Vnode\ scope$ дает контроль над авторизацией и позволяет запрещать операции, но $Vnode\ scope$ вызывается на порядки чаще, чем $FileOp\ scope$.
+
+В таблицах \ref{fig:fileopscope} и \ref{fig:vnodescope} представлены все $действия$, которые необходимо обработать функции авторизации. Операции из $Vnode\ scope$ могут быть совмещены вместе в битовой маске $action$. Снова обратим внимание, что $FileOp\ scope$ вызовы осуществляются \emph{после} события, поэтому возврат $listener$ функции будет проигнорирован. Однако во время $FileOp$ вызовов все данные уже проинициализированы, поэтому можно осуществить in-memory сканирование.
+
+\begin{figure}[hhh!]
+\begin{center}
+\begin{tabular}{|c|c|}
+\hline
+	OPEN & Файл $(vnode\_t) arg0$ был открыт по пути $(char*) arg1$ \\
+\hline
+	CLOSE & Файл $(vnode\_t) arg0$ по пути $(char*) arg1$ был закрыт \\
+\hline
+	RENAME & Файл по пути $(char*) arg0$ переименован в $(char*) arg1$ \\
+\hline
+	EXCHANGE & Был произведен обмен данных файлов (exchangedata) \\
+	& по путям $(char*) arg0$, $(char*) arg1$ \\
+\hline
+	LINK & Была создана жесткая ссылка $(Hard\ Link)$ \\
+	& к файлу по пути $(char*) arg0$ по пути $(char*) arg1$ \\
+\hline
+	EXEC & Запущена программа с $vnode\_t (arg0)$ по пути $(char*) arg1$ \\
+\hline
+\end{tabular}
+\end{center}
+\vspace{-5mm}\caption{$FileOp$ действия}
+\label{fig:fileopscope}
+\end{figure}
+
+\begin{figure}[hhh!]
+\begin{center}
+В таблице используются обозначения
+
+$vp=(vnode\_t)arg1$, $dvp=(vnode\_t)arg2$.
+
+$arg0$ - $VFS\ context$, $credential$ при авторизации.
+ 
+$arg3$ - код ошибки при $KAUTH\_RESULT\_DENY$. 
+
+\begin{tabular}{|c|c|}
+\hline
+	READ\_DATA & Будет прочитано содержимое файла $vp$ \\
+\hline
+	WRITE\_DATA & Будет записано содержимое файла $vp$ \\
+\hline
+	EXECUTE & Будет запущен файл $vp$ \\
+\hline
+	DELETE & Файл $vp$ в папке $dvp$ будет удален \\
+\hline
+	READ\_ATTRIBUTES & Будет прочитаны атрибуты файла $vp$ \\
+\hline
+	WRITE\_ATTRIBUTES & Будет записаны атрибуты файла $vp$ \\
+\hline
+	READ\_EXTATTRIBUTES & Будет прочитаны расширенные \\
+	& атрибуты (xattr) файла $vp$ \\
+\hline
+	WRITE\_EXTATTRIBUTES & Будет записаны расширенные \\
+	& атрибуты (xattr) файла $vp$ \\
+\hline
+	READ\_SECURITY  & Будет прочитаны \\
+	& Access Control List (ACL) файла $vp$ \\
+\hline
+	WRITE\_SECURITY  & Будет записаны \\
+	& Access Control List (ACL) файла $vp$ \\
+\hline
+	TAKE\_OWNERSHIP  & Будет изменен владелец файла $vp$ \\
+\hline
+	LINKTARGET & Будет создан $Hard\ Link$ файла $vp$ \\
+\hline
+	ACCESS & Специальный флаг для запроса \\
+	& \emph{возможности} действия над файлом \\
+\hline
+\end{tabular}
+\end{center}
+\vspace{-5mm}\caption{$Vnode$ действия для \emph{регулярных} файлов}
+\label{fig:vnodescope}
+\end{figure}
+
+При работе с $Kauth$ необходимо помнить о фильтрации собственных запросов, в противном случае произойдет deadlock при попытке авторизовать действие под замком. Простейшее решение проблемы является фильтрация путей $vnode$. Подобное решения является допустимым, но имеет ряд очевидных недостатков. Во-первых, пути фильтрации могут пересекаться с другими файлами, например при фильтрации доступа к файлу $/var/db/data$ необходимо отсекать аутентификацию папки $/var/db$, что недопустимо в общем случае. Во-вторых, тривиальное решение имеет плохую расширяемость, если пути прописаны в исходном коде.
+
+Универсальное решение данной проблемы может быть использование новых $credential$, созданных $kext$ из существующих $kauth\_cred$ и $vfs\_context$. Получить $vfs\_context$ можно из функции $vfs\_kernel\_context$ и $kauth\_cred$ из $vfs\_context\_ucred$ для $vfs\_kernel\_context$. Доступ через полученные $credentials$ нужно фильтровать для защиты от deadlock.
+
+\chapter{Представление виртуального файла}
+\section{Карта регионов}
+\label{sec:blockregions}
+Для представления полученных данных на диске необходимо хранить карту блоков, которые можно отдать на чтения. В данном разделе будет рассмотрен структура данных, позволяющая работать с такой картой.
+
+Рассмотрим действия над двумя картами $A$ и $B$. \emph{Объединение} ($A \cup B$) двух карт есть новая карта, которая содержит блоки обеих карт. \emph{Разность} ($A \setminus B$) двух карт будем называть функцию, которая возвращает карту, которая содержит все блоки карты $A$ за исключением блоков карты $B$. Действия \emph{пересечение} является действие вида $A \setminus (A \setminus B)$.
+
+Для имплементация класса $BlockRegions$ введем рассматривать действия, которые будут изменять сам объект, но не возвращать новый экземпляр. Интерфейс представлен в листинге \ref{fig:blockregions}.
+
+\begin{lstlisting}[style=CStyle, caption={Интерфейс класса $BlockRegions$}, label=fig:blockregions]
+struct BlockRegion
+{
+  UInt64 start;
+  UInt64 length;
+};
+
+class BlockRegionsIterator
+{
+public:
+  virtual ~BlockRegionsIterator() {};
+
+  virtual BlockRegion* getNext() = 0;
+  virtual void reset() = 0;
+};
+
+class BlockRegions
+{
+public:
+  virtual ~BlockRegions() {};
+
+  virtual int add(BlockRegion) = 0;
+  virtual bool checkAndRemove(BlockRegion) = 0;
+
+  virtual BlockRegionsIterator* getIterator() const = 0;
+
+  virtual bool isEmpty() const = 0;
+  virtual void clear() = 0;
+  virtual int getCount();
+};
+\end{lstlisting}
+
+Блоки представлены в виде полуотрезков вида $[start, end),\ start<end,$ $length=start-end$, указывающие на часть файла, которая была скачена. Такой полуотрезок будем называть \emph{регион} ($BlockRegion$). 
+
+$BlockRegions$ дает интерфейс для работы с картой блоков регионов. Действия \emph{объединение} и \emph{разность} представлены в виде функций $add$ и \\ $checkAndRemove$. $checkAndRemove$ также возвращает информация о существовании пересечения между регионом и картой.
+
+$BlockRegionsIterator$ предоставляет интерфейс для получения списка регионов, хранящихся в $BlockRegions$. $Iterator$ можно использовать для удобного расширения методов $add$ и $checkAndRemove$ до $...(BlockRegions*)$, смотреть листинг \ref{fig:convenienceregions}.
+
+\begin{lstlisting}[style=CStyle, caption={Удобное расширение FUNC до списка регионов}, label=fig:convenienceregions]
+void BlockRegions::FUNC(BlockRegions* regions)
+{
+  BlockRegionsIterator* it = regions->getIterator();
+  BlockRegion* region;
+  while ((region = it->getNext()))
+    FUNC(*region);
+
+  delete it;
+}
+\end{lstlisting}
+
+\section{Список непересекающихся регионов}
+\label{sec:blockregionsdisjoint}
+$BlockRegions$ никак не ограничивает тип хранимых блоков. Для данной работы необходимо, чтобы блоки не пересекались, в противном случае нельзя понять каких блоков не хватает для чтения из файла. Рассмотрим реализацию интерфейса $BlockRegions\_Disjoint$, который хранит упорядоченные непересекающиеся регионы. Будем представлять набор регионов в виде односвязного списка, отсортированного по возрастанию $start$. Список организован через дополнительное хранимое поле в структуре (\ref{fig:blockregiondisjoint}). В классе добавим $sentinel$ поле $Head$, которое будет отвечать за голову списка и будет пустым $BlockRegion\_DisjointElem$. Новый метод $merge$ будет "склеивать" пересекающиеся элементы списка и будет показан позже.
+
+\begin{lstlisting}[style=CStyle, caption={Расширение структуры $BlockRegion$}, label=fig:blockregiondisjoint]
+class BlockRegions_Disjoint : public BlockRegions
+{
+...
+protected:
+  BlockRegion_DisjointElem* Head;
+  virtual int merge(BlockRegion_DisjointElem* merge);
+};
+
+struct BlockRegion_DisjointElem
+{
+  UInt64 start;
+  UInt64 length;
+  BlockRegion_DisjointElem* next;
+};
+\end{lstlisting}
+
+\subsection{Термины}
+\label{sec:blockregionsdisjointterminology}
+Введем отношение порядка на регионах $BlockRegion\_DisjointElem$ по полю $start$: элемент $a$ меньше элемента $b$, если $a.start < b.start$, аналогично для меньше или равно. $Sentinel$ регион меньше любого другого региона.
+
+Нвзовем состояние объекта $BlockRegions\_Disjoint$ валидным, если выполнены 3 условия:
+\begin{enumerate}
+\item Нет пересечений регионов.
+\item Регионы в списке отсортированы по возрастанию
+\item Отсутствуют регионы нулевой длины.
+\end{enumerate}
+
+Тогда можно представить наборы блоков валидного объекта в виде отрезков на оси (рис. \ref{fig:regionsex}).
+
+\begin{figure}[hhhhh!]
+\begin{center}
+\includegraphics[width=17cm]{fig/regionsex.png}
+\end{center}
+\vspace{-5mm}\caption{Обозначения для регионов на оси}
+\label{fig:regionsex}
+\end{figure}
+
+Будем считать, что объект $BlockRegions\_Disjoint$ обязан быть в валидном состоянии после выполнения любого метода класса.
+
+В листингах для удобства будут использованы макросы $START$ и $END$, определенные в \ref{fig:regionsmacros}.
+
+\begin{lstlisting}[style=CStyle, caption={Макросы доступа в $BlockRegion$}, label=fig:regionsmacros]
+#define START(reg) ((reg)->start)
+#define END(reg) ((reg)->stat + (reg)->length)
+\end{lstlisting}
+
+\subsection{Метод merge}
+\label{sec:blockregionsmerge}
+Метод $merge$ является защищенным методом и помогает восстановить список из невалидного состояния при нарушении свойства 1: наличие пересекающихся регионов, при этом будем требовать выполнения свойств 2 и 3. Аргумент функции $merge$ - регион $victim$, после которого происходит нарушение свойства 1, то есть регионы $victim$ и $victim \rightarrow next$ пересекаются. Псевдокод метода $merge$ приведен в листинге \ref{fig:regionsmerge}.
+
+\begin{lstlisting}[style=CStyle, caption={Псевдокод функции $merge$}, label=fig:regionsmerge]
+void merge(BlockRegion* victim)
+{
+  if (victim == sentinel) return;
+
+  // Find if next is intersecting
+  while (victim->next != NULL && END(victim) >= START(victim->next))
+  {
+    // Merge the region and adjust victim
+    merged = region->next;
+    if (END(victim) < END(victim->next))
+      victim->length = END(victim->next) - START(victim);
+
+    victim->next = merged->next;
+    delete merged;
+  }
+}
+\end{lstlisting}
+
+Метод $merge$ проверяет, что следующий регион $victim \rightarrow next$ пересекается с $next$ и изменяет размер $victim$, если требуется. Так как выполнено регионы отсортированы (свойство 2), то $while\ loop$ достаточно для проверки всех необходимых регионов. Заметим, что не всегда необходимо изменять длину региона $victim$: $victim \rightarrow next$ находится полностью внутри $victim$ не требует изменения длины.
+
+\subsection{Метод add}
+\label{sec:blockregionsadd}
+Пусть метод $add$ при вставке региона $new$ будет находить такой наибольший элемент в списке, что его значение $start$ меньше или равно $start$ вставляемого региона. Обозначим найденный регион $last$. Заметим, что в виду существования $sentinel$ региона, $last$ всегда будет найден. Тогда возможно два варианта расположения нового региона, показанных на рисунке (\ref{fig:regionadd}): $end(last) > start(new)$ или $end(last) \leq start(new)$. Эти два случая соответствуют наличию или отсутствию пересечения $last$ и $new$.
+
+\begin{figure}[hhhhh!]
+\begin{center}
+\includegraphics[width=17cm]{fig/regionsadd.png}
+\end{center}
+\vspace{-5mm}\caption{Варианты для добавления нового региона}
+\label{fig:regionadd}
+\end{figure}
+
+Из рисунка можно увидеть, что данное состояние списка является невалидным, так как свойство 1 валидности не выполнено. При вставке после элемента $last$ другие свойства остаются выполненными, поэтому достаточно функцию $merge$ с правильным регионом, $next$ которого пересекается с собой: $last$ в первом случае, $new$ во втором случае.
+
+Так получаем итоговый псевдокод функции $add$ (листинг \ref{fig:regionsadd}). Дополнительная проверка в начале была добавлена для гарантии свойства отсутствия нулевых регионов. 
+
+\begin{lstlisting}[style=CStyle, caption={Псевдокод функции $add$}, label=fig:regionsadd]
+void add(BlockRegion new)
+  if (new->length == 0)
+    return;
+
+  // Find last region
+  BlockRegion_DisjointElem* last = Head;
+  while (last->next != NULL && START(last->next) < START(new))
+    last = last->next;
+
+  // Insert in list and do merge
+  new->next = last->next;
+  last->next = new;
+
+  if (START(new) <= END(last))
+    merge(last);
+  else
+    merge(new);
+}
+\end{lstlisting}
+
+\subsection{Метод checkAndRemove}
+\label{sec:blockregionsremove}
+Для имплементации $checkAndRemove(remove)$ будем идти по списку регионов и сравнивать его с $remove$ регионом. Рассмотрим всевозможные способы пересечения двух регионов. Будем считать, что регион над осью - регион из списка, регион под осью - $remove$ регион.
+
+\begin{figure}[hhhhh!]
+\begin{center}
+\includegraphics[width=17cm]{fig/regionssub.png}
+\end{center}
+\vspace{-5mm}\caption{Способы пересечения двух регионов}
+\label{fig:regionsex}
+\end{figure}
+
+Заметим, что при удалении из валидного списка не может нарушиться свойства 1 и 2 валидности, так как новые регионы не создаются и сортировка оставшихся регионов не нарушена. 
+
+Рассмотрим варианты пересечения регионов и распишем как создать новую карту. Будем использовать обозначение $region$ для текущего региона из списка. 
+\begin{enumerate}[start=0]
+\item $start(region) \leq start(remove)\ \&\ end(remove) \leq end(region)$.
+
+Регион $remove$ лежит внутри $region$. Итоговый список теперь должен иметь 2 региона: до $remove$ и после $remove$. Заметим, что данная операция требует создания нового региона, а регион $region$ можно переиспользовать для обозначения региона до $remove$. Подобная процедура переиспользования будет применена в следующих случаях аналогично.
+
+\item $start(region) < start(remove) < end(region) < end(remove)$. 
+
+Конец $region$ находится в $remove$. В этом случае достаточно лишь поменять длину региона $region$. Так как условия строгие, то региона нулевой длины получиться не может.
+
+\item $start(remove) \leq start(region)\ \&\ end(region) \leq end(remove)$.
+
+Регион $region$ полностью находится внутри региона $remove$. Достаточно удалить такой регион из списка. Обратим внимание, что данный случай покрывает краевые случаи равенства одного или двух концов.
+
+\item $start(remove) < start(region) < end(remove) < end(region)$.
+
+Начало $region$ находится в $remove$. В этом случае меняем начало региона $region$ на значения конца региона $remove$. Так как условия строгие, то региона нулевой длины получиться не может.
+\end{enumerate}
+
+Понятно, что данная процедура является корректной: всевозможные случаи расположения двух регионов, включая краевые случаи, рассмотрены. Также предположим, что случай равенства и начала, и конца регионов $region$ и $remove$ есть случай 3. Тогда, никакой регион не может удовлетворять одновременно двум случаям: если один из концов равен другому, то это может быть только вариант 0 для другого конца снаружи или вариант 2 для другого конца внутри. Если равенство отсутствует, то из-за строгих сравнений может быть выполнен лишь один случай. При этом легко убедиться в том, что если регионы не пересекаются, то есть $end(remove) \leq start(region)$ или $end(region) \leq start(remove)$, они не удовлетворяют ни одному из представленных условий.
+
+Приведем псевдокод для данных условий в листинге \ref{fig:regionscheck}. В цикле проходятся все регионы до конца $remove$ и для каждого из них проверяются условия. Обратим внимание, на способ получения следующего региона: сохраняется значение $previousRegion$, через $next$ которого получаем следующий в списке регион. Во время проверки условий $region$ может быть удален, тогда выставляется новое значение $next$ для $previousRegion$. Также заметим, что важно выставлять корректно новые $start$ и $length$ для переиспользованных регионов, $length$ должен быть записан раньше, чем $start$ из-за метода определения макросов $START$ и $END$. 
+
+\begin{lstlisting}[style=CStyle, caption={Псевдокод функции $checkAndRemove$}, label=fig:regionscheck]
+bool checkAndRemove(BlockRegion remove)
+{
+// Do not try to remove empty region
+if (remove.length == 0)
+  return false;
+
+bool isInRegions = false;
+
+BlockRegion region = Head->next;
+BlockRegion previousRegion = Head;
+
+// Optimization for definite not intersecting region
+while (region != NULL && START(region) < END(remove)) {
+  // Condition 0: Split existing region
+  if (START(region) <= START(remove) && END(remove) <= END(region)) {
+    // Leftover region from right
+    if (END(region) - END(remove) != 0) {
+      BlockRegion leftoverRegion = new BlockRegion;
+      leftoverRegion->start = END(remove);
+      leftoverRegion->length = END(region) - END(remove);
+      leftoverRegion->next = region->next;
+      region->next = leftoverRegion;
+    }
+    
+    // Leftover region from left is reused from region
+    region->length = START(remove) - START(region);
+    if (region->length == 0) {
+      // This is set to make "region = previousRegion->next" command be universal
+      previousRegion->next = region->next;
+      delete region;
+      region = previousRegion;
+    }
+
+    isInRegions = true;
+  }
+
+  // Condition 1: End is in check region -> move end
+  if (START(region) < START(remove) && START(remove) < END(region) && END(region) < END(remove)) {
+    region->length = START(remove) - START(region);
+    isInRegions = true;
+  }
+
+  // Condition 2: Current region is INSIDE check region -> delete, fix current region
+  if (START(remove) <= START(region) && END(region) <= END(remove)) {
+    // Should be done before delete
+    previousRegion->next = region->next;
+    delete region;
+
+    region = previousRegion;
+    isInRegions = true;
+  }
+    
+  // Condition 3: Current region is intersecting with check region -> move start
+  if (START(remove) < START(region) && START(region) < END(remove) && END(remove) < END(region)) {
+    // Order is important!
+    region->length = END(region) - END(remove);
+    region->start = END(remove);
+
+    isInRegions = true;
+  }
+
+  previousRegion = region;
+  region = previousRegion->next;
+}
+
+return isInRegions;
+}
+\end{lstlisting}
+
+\section{Использование}
+Список регионов $BlockRegion\_Disjoint$ можно хранить для каждого виртуального файла или в \emph{расширенном атрибуте} ($xattr$), или в описанном в разделе \ref{sec:memobject}. При попытки чтения из файла производится чтение данных из регионов, которые до этого были еще не считаны. Псевдокод получения несчитанных регионов приведен в листинге \ref{fig:regionsunread}. Если количество отсутствующих регионов равно нулю, то запрос клиенту можно не производить и так оптимизировать работу.
+
+\begin{lstlisting}[style=CStyle, caption={Псевдокод функции $checkAndRemove$}, label=fig:regionsunread]
+BlockRegions getUnreadRegions(vnode_t vp, BlockRegion regToRead)
+{
+  BlockRegions presentedRegions = REGIONS(vp);
+  BlockRegions unreadRegions;
+  unreadRegions.add(regToRead);
+  foreach (Region reg in presentedRegions)
+  {
+    unreadRegions.checkAndRemove(reg);
+  }
+  
+  return unreadRegions;
+}
+\end{lstlisting}
+
+\chapter{Виртуальная память процесса}
+В этой главе будет рассмотрена часть реализации виртуальной памяти, относящейся к $mmap$ на файлы. Для работы с файлами в удаленным хранилищем необходимо предоставлять некоторым процессам доступ к файлам, но не подгружать данные. В виду кэширования страниц в $vm\_object$ нельзя отдавать невалидные страницы (смотреть \ref{sec:ubc}), поэтому было выбрано решение \emph{подмены} $vm\_object$ файла на $vm\_object$ с пустыми страницами.
+
+\section{Описание карты виртуальной памяти}
+Приложения для доступа к этому кэшу используют виртуальную память, адреса в которой отображается на $vm\_object\_t$ \emph{через карту виртуальной памяти} ($vm\_map\_t$). Схема карты показана на рисунке (\ref{fig:vmmap}).
+
+\begin{figure}[hhhhh!]
+\begin{center}
+\includegraphics[width=17cm]{fig/vmmap.png}
+\end{center}
+\vspace{-5mm}\caption{Карта виртуальной памяти процесса}
+\label{fig:vmmap}
+\end{figure}
+
+Карта состоит из списка записей. Запись определяет участок виртуальной памяти, к которому относятся адреса и указывает или на $vm\_object$ с страницами, или на другую $vm\_map$ - \emph{подкарта} ($submap$). При использовании функции $fork$ для обеспечения $copy-on-write$ страниц виртуальной памяти используются \emph{объекты с тенью}. Тень объекта - другой $vm\_object$, который дает страницы для данного объекта при доступе.
+
+Для получения карты $vm\_map$ используем функцию $current\_map$ и производим ее парсинг. В заголовке карты находится первый элемент списка записи. Для каждой записи ищем объект и проверяем принадлежит ли он к файлу с удаленным хранилищем. При нахождении объекта подменяем указатель на новый $vm\_object$ с пустыми страницами. Структуры данных представлены в листинге \ref{fig:structvmmap}.
+
+\begin{lstlisting}[style=CStyle, caption={Структуры данных $vm\_map$}, label=fig:structvmmap]
+struct _vm_map {
+	lck_rw_t lock;
+	struct vm_map_header hdr;
+	...
+}
+
+struct vm_map_header {
+	struct vm_map_links	links; /* first, last, min, max */
+	int			nentries; /* Number of entries */
+	...
+};
+
+struct vm_map_links {
+	struct vm_map_entry	*prev;		/* previous entry */
+	struct vm_map_entry	*next;		/* next entry */
+	vm_map_offset_t		start;		/* start address */
+	vm_map_offset_t		end;		/* end address */
+};
+
+struct vm_map_entry {
+	struct vm_map_links	links;		/* links to other entries */
+
+	struct vm_map_store	store;
+	union vm_map_object	vme_object;	/* object I point to */
+	vm_object_offset_t	vme_offset;	/* offset into object */
+	...
+}
+
+typedef union vm_map_object {
+	vm_object_t		vmo_object;	/* object object */
+	vm_map_t		vmo_submap;	/* belongs to another map */
+} vm_map_object_t;
+\end{lstlisting}
+
+\chapter{Структура UserSpace клиента}
+\section{Транспорт Kernel - User}
+\label{sec:transport}
+Для работы виртуальных файлов нужен UserSpace клиент, который будет предоставлять содержимое удаленных документов. В этой главе будет рассмотрен транспорт, который позволит получать данные, само устройство клиента может быть любым и зависит от применения виртуальных файлов, это может быть облако или архив. \cite{Singh}
+
+$Kext$ для пользователей в $UserSpace$ является сервисом, предоставляющим информацию. Время жизни клиента должно определять поведение $kext$, например смерть клиента не должна приводить к ошибкам в ядре.
+
+\subsection{IOUserClient}
+\label{sec:userclient}
+При регистрации создается объект наследника класса $IOUserClient$. В листинге \ref{fig:findkext} приведен пример кода, который позволяет найти в дереве $IOKit$ $kext$. Объект $io\_connect$ может быть использован для организации транспорта.
+
+\begin{lstlisting}[style=CStyle, caption={Нахождения $kext$ в $IOKit$ дереве}, label=fig:findkext]
+io_connect_t open_connection(char* driverName)
+{
+  kern_return_t ret = KERN_SUCCESS;
+  CFDictionaryRef classToMatch = NULL;
+  io_service_t serviceObject;
+  io_connect_t connection;
+  kern_return_t kr;
+
+  classToMatch = IOServiceMatching(driverName);
+  serviceObject = IOServiceGetMatchingService(
+  				  kIOMasterPortDefault, classToMatch);
+  IOServiceOpen(serviceObject, mach_task_self(), type, &connection);
+  IOObjectRelease(serviceObject);
+  return connection;
+}
+\end{lstlisting}
+
+Для вызова методов ядра используется функция $IOConnectCallMethod$, которая копирует данные клиента и вызывает функцию $externalMethod$ в $kext$. Клиент может передать и получить 2 типа данных, числа $uint64$ или структуру, они упаковываются в объект $IOExternalMethodArguments$. $Kext$ переопределяет функцию $IOUserClient::externalMethod$ и передает управление в зависимости от \emph{селектора (selector)}, заменяя статический экземпляр объекта $IOExternalMethodDispatch$. $IOUserClient::externalMethod$ проверяет валидность размеров переданных клиентом данных и вызывает функцию, указанную в $IOExternalMethodDispatch$. Заметим, что допустима передача данных в структуре переменной длины, для этого необходимо указать размер -1 в поле $check...$ . В листинге \ref{fig:kextconn} приведены прототипы функций в $Kernel$ и $UserSpace$.
+
+\begin{lstlisting}[style=CStyle, caption={Прототипы структур и функций транспорта $kext \rightarrow  user$}, label=fig:kextconn]
+kern_return_t IOConnectCallMethod(mach_port_t connection, uint32_t selector, 
+	const uint64_t* input, uint32_t inputCnt, 
+	const void* inputStruct, size_t inputStructCnt, 
+	uint64_t* output, uint32_t* outputCnt, 
+	void* outputStruct, size_t* outputStructCnt);
+
+IOReturn IOUserClient::externalMethod(
+	uint32_t selector, IOExternalMethodArguments* args,
+	IOExternalMethodDispatch* dispatch, 
+	OSObject* target, void* reference);
+
+struct IOExternalMethodDispatch
+{
+    IOExternalMethodAction function;
+    uint32_t checkScalarInputCount;
+    uint32_t checkStructureInputSize;
+    uint32_t checkScalarOutputCount;
+    uint32_t checkStructureOutputSize;
+};
+
+typedef IOReturn (*IOExternalMethodAction)(
+  OSObject* target, void* reference, 
+  IOExternalMethodArguments * arguments);
+\end{lstlisting}
+
+\subsection{IOSharedDataQueue}
+\label{sec:sharedqueue}
+При существующей связи $user \rightarrow kext$ организация обратной связи $kext \rightarrow user$ возможно многими способами. В данной работе будет рассмотрена очередь сообщения $IOSharedDataQueue$ как транспорт $kext \rightarrow user$.
+
+$Kext$ создает экземпляр очереди с указанием размер, например, во время присоединении клиента. Клиент после инициализации создает порт для передачи данных через $IODataQueueAllocateNotificationPort$, вызывает функцию $IOConnectMapMemory$ и получает указатель на разделенную память $IODataQueueMemory$ для работы с очередью. Далее клиент ждет событий о добавлении новых данных при помощи $DataAvailable$ и получает их при поступлении через $Dequeue$. Пример кода клиента представлен в листинге \ref{fig:userdataqueue}.
+
+\begin{lstlisting}[style=CStyle, caption={$UserSpace$ код для работы с $IOSharedDataQueue$}, label=fig:userdataqueue]
+void ListenToEvents(io_connection_t connection)
+{
+  mach_port_t port = IODataQueueAllocateNotificationPort();
+  IOConnectSetNotificationPort(connection, 0, port, 0);
+
+  mach_vm_address_t address = 0;
+  mach_vm_size_t size = 0;
+  IOConnectMapMemory(connection, 0, mach_task_self(), &address, &size, kIOMapAnywhere);
+
+  IODataQueueMemory *queueMemory = (IODataQueueMemory *)address;
+  do {
+    while (IODataQueueDataAvailable(queueMemory)) {
+      void* msg = malloc(entry->size);
+      kr = IODataQueueDequeue(queueMemory, msg, &entry->size);
+      { /* Parse message here */ }
+      free(msg);
+    }
+  }
+  while (IODataQueueWaitForAvailableData(queueMemory, port) == kIOReturnSuccess);
+
+  IOConnectUnmapMemory(connection, 0, mach_task_self(), address);
+}
+\end{lstlisting}
+
+Со стороны $Kernel$ $kext$ должен предоставить зарегистрировать порт, переопределяя метод $IOUserClient::registerNotificationPort$ и устанавливая его в созданную очередь при помощи метод $IOSharedDataQueue::setNotificationPort$. Для отправки сообщений $kext$ должен использовать метод $IOSharedDataQueue::enqueue$, который \emph{асинхронно} добавляет новый элемент в очередь.
+
+\subsection{Синхронный транспорт}
+\label{sec:reqresp}
+Для работы виртуальных файлов на операции $Read$ должна происходить \emph{синхронная} загрузка данных, в противном случае $Read$ считает невалидное содержимое файла. Сформулируем требования для транспорта, достаточные для организации виртуальных файлов.
+
+\begin{enumerate}
+\item Синхронность. $Kext$ на операции чтения должен ожидать пока сервис не загрузит корректные данные файл.
+\item Наличие тайм-аута ($timeout$). Иметь $timeout$ удобно для отладки и уменьшения нагрузки на приложение, предоставляющее данные (режим $Passthrough$).
+\item Очистка аллоцированных объектов. Все объекты должны быть освобождены после использования.
+\end{enumerate}
+
+Ожидаемые прототипы функций представлены в листинге \ref{fig:syncprot}.
+
+\begin{lstlisting}[style=CStyle, caption={Прототипы функций синхронного транспорта}, label=fig:syncprot]
+
+/// Sync header
+struct SyncMsg {
+  uintptr_t ptrSelf;
+  uintptr_t time;
+};
+
+/// Sends msg to userspace and waits for UnlockSyncMsg
+/// ptr & time in SyncMsg should not be filled
+bool SendSyncMsg(struct SyncMsg* msg, UInt32 msgSize);
+
+// Callback to unlock waiting sync msg
+// Ptr should be the one filled in struct SyncMsg
+bool UnlockSyncMsg(uintptr_t ptrSelf, uintptr_t time);
+
+\end{lstlisting}
+
+Заметим, что очередь является асинхронной: метод $enqueue$ не ждет пока клиент вызовет функцию $Dequeue$. Рассмотрим способ сделать синхронный транспорт из асинхронной очереди. Будем при отправке создавать $conditional\ variable$ и $mutex$, которые будем разблокировать при получении нотификации об обработке. Функция $msleep$ позволяет ожидать событие на $conditional\ variable$, заданной как произвольный указатель ($msleep$ $channel$). Для простоты достаточно использовать сам указатель на аллоцированный $mutex$ или указатель на сообщение, которое нужно отправить.
+
+Для требования очистки будет предполагать, что функция, создавшая $mutex$ должна его и очистить. В таком предположении получаем схему работы синхронного интерфейса с тайм-аутами, представленную на рисунке \ref{fig:msleelscheme}. Нормальный режим работы представлен в первой временной секции: $kext$ инициализирует сообщение обфусцированным указателем на $SyncMsg$, отправляет сообщение в очередь, $msleep$ ожидает событие от $UnlockMsg$, клиент обрабатывает сообщение и вызывает $UnlockMsg$, $kext$ очищает аллоцированные данные. Множественные $msleep$ нужны для обнаружения смерти клиента, если никто не сможет вызвать $UnlockMsg$, то ожидание можно остановить.
+
+При первом тайм-ауте, после $MsleepCount * Repeat$ секунд, берется последний $msleep$ на время $Unlock\ Timeout$ секунд. В это время у клиента есть последний шанс разблокировать $kext$. После $Unlock\ Timeout$ секунд клиент больше не должен доступаться к аллоцированной памяти.  $kext$ при этом сам разблокирует $mutex$ и ждет еще $Mutex\ Free\ Timeout$. Этот тайм-аут нужен для случая, когда $UnlockMsg$ уже начал доступ к функции, а $Unlock\ Timeout$ уже прошел. После окончания $Mutex\ Free\ Timeout$ данные очищаются.
+
+\begin{figure}[hhhhh!]
+\begin{center}
+\includegraphics[width=16.5cm]{fig/msleep.png}
+\end{center}
+\vspace{-5mm}\caption{Схема работы синхронного интерфейса}
+\label{fig:msleelscheme}
+\end{figure}
+
+\section{Схема запросов/ответов}
+\label{sec:reqresp}
+Рассмотрим схему запросов и ответов для клиента и $kext$. Рабочий режим начинается при установке путей за которым необходимо следить. $Kext$ перехватывает операции записи и при вызове $VNOP\_WRITE$ отправляет сообщение клиенту с регионами, которые нужно скачать. Будем считать, что количество регионов ограничено восемью, при необходимости сообщение будет отправлено несколько раз. Также заметим, что для открытия файла достаточно знать его $vnode\_id$ и $dev\_id$, однако путь является более переносимым. Структура сообщения представлена в листинге \ref{fig:msgkext}.
+
+\begin{lstlisting}[style=CStyle, caption={Синхронное сообщение для загрузки регионов в файл}, label=fig:msgkext]
+struct DownloadRequestMsg
+{
+  struct SyncMsg header;
+#ifdef COMPAT
+  const char path[MAXPATHLEN];
+#else
+  uint64_t vnodeId;
+  uint64_t devId;
+#endif
+  BlockRegion[MAX_COUNT];
+};
+\end{lstlisting}
+
+Клиент в ответ вызывает метод $kext$ для разблокирования синхронного сообщения, $kext$ разрешает чтения файла.
+
+Опишем дополнительное методы управления $kext$. Для сохранения информации о регионах файла добавим функции для доступа в расширенным атрибутам или к \emph{per vnodе} хранилищу. $Kext$ также будет кэшировать информацию о статусе файла, обеспечим доступ к кэшу через функции $addToCache$ и $removeFromCache$. Для изменения содержимого файла со стороны клиента дадим функции блокировки операций чтения и записи $lockFileRead$ и $lockFileWrite$. Для очистки кэша после дегидрации, введем метод для удаления $UBC$ кэша $invalidateVnodeCache$.
+
+\chapter{Имплементация и производительность}
+\label{sec:reqresp}
+\section{Связи объектов}
+В данной работе $userspace$ процесс не будет рассматриваться конкретно в виду его сложности с точки зрения работы с данными. $Kext$ будет состоять из нескольких классов и их отношениях. Схема связей классов представлена на рисунке \ref{fig:classimpl}.
+
+\begin{figure}[hhhhh!]
+\begin{center}
+\includegraphics[width=13.5cm]{fig/impl.png}
+\end{center}
+\vspace{-5mm}\caption{Схема классов}
+\label{fig:classimpl}
+\end{figure}
+
+При авторизации чтения из файла на $VnodeOp$ коллбэке в $KauthFilter$ необходимого файла производится проверка является ли файл виртуальным. Если файл виртуальный и его таблица $VOP$ не перехвачена, производится ее перехват. На операции чтения из файла, в $File\ Manager$ отправляется регион чтения. При помощи методов $Block\ Region$ находится та часть файла, которую необходимо скачать с удаленного хранилища. Если пересечение не пусто, отправляется синхронный запрос $UserSpace$ клиенту и ожидается пока в файл не будут записаны данные. На операции $pagein$ в случае необходимости производится итерация по списку записей карты виртуальной памяти и подменяется $vm\_object$.
+
+Исходный код решения представлен в приложении 1 дипломной работы.
+
+\section{Схема потока данных}
+\label{sec:reqresp}
+Структура сообщений, отправляемая пользовательскому приложению представлена в листинге \ref{fig:msgkext}. Для уменьшения количества отправляемых сообщений будем округлять размеры чтения регионов чтения. Рассмотрим два случая:
+
+\begin{enumerate}
+\item Побайтовое последовательное чтение
+\item Побайтовое чтение больше размера блока
+\end{enumerate}
+
+Будем считать, что количество считанных байт равно $Count$, размер блока равен $Block$. Количество сообщений, отправленных в $userspace$ равно примерно $Count/Block$. Количество отправленных данных равно $Count/Block * sizeof(DownloadRequestMsg)$.
+
+\section{Защита от фиктивного чтения}
+\label{sec:reqresp}
+Наибольшая проблема наличия виртуальных файлов в системе - их \emph{фиктивное чтение}. Процессы, которые производят индексацию локальных файлов рассчитывают, что содержимое любых файлов является постоянным и чтение безопасно. Для виртуальных файлов подобное чтение является недопустимым, так как оно порождает полную выгрузку файла с удаленного хранилища.
+
+\subsection{Списки фильтрации приложений}
+Для разрешения данной проблемы будем производить изменение поведения чтения по \emph{спискам фильтрации} двух категорий:
+\begin{enumerate}
+\item Запрет чтения файла процессам
+\item Отдача "пустых" данных
+\end{enumerate}
+
+При полном запрете чтения данных приложение никогда не будет получать некорректные данные, однако подобное поведение может породить некорректную работу. Так, при работе с \emph{файлом, отображенным в память (memory-mapped file)} при запрете чтения приложение войдет в $deadlock$ состояние на чтении байта или приведет к его падению.
+
+При отдаче пустых данных файловая система может закэшировать фиктивные страницы и в последствии не вызвать функции чтения данных для других процессов. $UBC$ при получении пустых страниц на операции $pagein$ произведет их кэширование и тем самым будет требоваться последующая очистка кэша при помощи функции $ubc\_msync$.
+
+В операционной системе macOS приложения, отвечающие за кэширование являются $mds$ и $mdworker$. Их можно безопасно включить во список фильтрации 1. $Finder$ и $quicklookd$ производят отрисовку иконок и предварительного просмотра изображений и видеоматериалов. Заметим, что $Finder$ не даст пользователю открыть файл, если он сам не может его открыть с правами пользователя, поэтому $Finder$ должен находиться во втором списке фильтрации.
+
+\subsection{Проверка запущенных процессов}
+Рассмотрим часть структуре процесса \emph{struct proc}.
+
+\begin{lstlisting}[style=CStyle, caption={Структура процесса}, label=fig:structproc]
+struct	proc {
+  ...
+  char p_comm[MAXCOMLEN+1];  /* Process Command Name */
+  ...
+  struct vnode *p_textvp;    /* Vnode of executable. */
+  off_t p_textoff;           /* offset in executable vnode */
+  ...
+}
+\end{lstlisting}
+
+Начальную фильтрацию можно производить при помощи \emph{имени} процесса $p\_comm$, но в системе может быть запускаемый файл с таким же именем, что будет порождать \emph{false positive}. В структуре процесса также записана $vnode$, которая имеет в себе данные о запущенном приложении. Фильтрация по имени является достаточным признаком процесса, но является дорогостоящей операцией. Для уменьшения нагрузки можно использовать свойство уникальности файла в системе по 64-битному полю $vnode\ id$ и 32-битному $device\ id$, вместе образующие 96-битный уникальный ключ $file\ id$.
+
+Для нахождения $file\ id$ в ядре достаточно открыть файл с необходимым именем, например \emph{/usr/bin/mdworker}, и получить его атрибуты, смотреть (\ref{fig:structfileid}).
+
+\begin{lstlisting}[style=CStyle, caption={Структура процесса}, label=fig:structfileid]
+struct FileId
+{
+  uint32_t devId;
+  uint64_t vnodeId;
+};
+
+FileId getFileId(vnode_t vp, vfs_context_t ctx)
+{
+  struct vnode_attr va;
+
+  vnode_getwithref(vp);
+
+  VATTR_INIT(&va);
+  VATTR_WANTED(&va, va_fileid);
+  VATTR_WANTED(&va, va_fsid);
+
+  vnode_getattr(vp, &va, ctx);
+  vnode_put(vp);
+  
+  return { va.va_fsid, va.va_fileid };
+}
+\end{lstlisting}
+
+\conclusion
+В езультате исследования было написано расширение ядра macOS, осуществляющее создание виртуальных файлов с удаленным хранилищем. При помощи перехватов операций $vnode$ остается поддержка $POSIX\ API$, а файлы при скачивании остаются локально. Парсинг виртуальной памяти отфильтрованных процессов позволяет тонко контролировать доступ к невалидным страницам файла. Описанный синхронный протокол дает возможность гибкого соединения с $UserSpace$ клиентом, при сбоях возможно использование тайм-аута и более простой проверки работоспособности.
+
+Предложенные методы используются в Acronis для продуктов Acronis File Protect и Acronis Sync \& Share для macOS.
+
+\bibliographystyle{gost2008}
+\bibliography{thesis}
+
+%\appendix
+%\input{app-a}
+
+\end{document}
