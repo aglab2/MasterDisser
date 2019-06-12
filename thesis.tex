@@ -16,9 +16,9 @@
 \usepackage{tabularx}
 \usepackage{tikz}
 
-\usepackage{draftwatermark}
-\SetWatermarkLightness{0.95}
-\SetWatermarkScale{3}
+%\usepackage{draftwatermark}
+%\SetWatermarkLightness{0.95}
+%\SetWatermarkScale{3}
 
 \ifpdf\usepackage{epstopdf}\fi
 
@@ -139,6 +139,8 @@
 Классическое решение данной проблемы подразумевает использование виртуальной файловой системы таких как $smbfs$ или $nfs$ и их монтирование в папку - новый корень файловой системы. Такой подход удовлетворяет первому свойству, однако для обеспечения сохранения данных необходимо производить существенные изменения в протокол или добавлять новый уровень абстракции персистентного кэша.
 
 В дипломе будет рассмотрено другое решение, не требуещее создания искусственной файловой системы, для работы достаточно загрузки расширения ядра операционной системы macOS, \emph{Kernel Extension (kext)}. В системе будут создаваться \emph{обычные} sparse-файлы, не хранящие по умолчанию данных, а $kext$ будет скачивать данные на операции чтения. Такой подход будет удовлетворять требованию 1 и 2.
+
+Первая глава диплома описывает общую структуру работы файлов в ядре. В главах 2-4 приводятся разработанные методы и алгоритмы, которые необходимы для перехватов. В последней главе представлены схемы связей компонентов вместе и измерения характеристик продукта.
 
 \chapter{Файловые операции}
 
@@ -315,7 +317,56 @@ typedef struct vnode_pager {
 TODO привести крутую картинку
 
 \subsection{Paging info}
-Epic
+В этой секции будет рассмотрена часть реализации виртуальной памяти, относящейся к $mmap$ файлам. Для работы с файлами в удаленным хранилищем необходимо предоставлять некоторым процессам доступ к файлам, но не подгружать данные. В виду кэширования страниц в $vm\_object$ нельзя отдавать невалидные страницы (смотреть \ref{sec:ubc}), поэтому было выбрано решение \emph{подмены} $vm\_object$ файла на $vm\_object$ с пустыми страницами.
+
+Приложения для доступа к этому кэшу используют виртуальную память, адреса в которой отображается на $vm\_object\_t$ \emph{через карту виртуальной памяти} ($vm\_map\_t$). Схема карты показана на рисунке (\ref{fig:vmmap}).
+
+\begin{figure}[hhhhh!]
+\begin{center}
+\includegraphics[width=17cm]{fig/vmmap.png}
+\end{center}
+\vspace{-5mm}\caption{Карта виртуальной памяти процесса}
+\label{fig:vmmap}
+\end{figure}
+
+Карта состоит из списка записей. Запись определяет участок виртуальной памяти, к которому относятся адреса и указывает или на $vm\_object$ с страницами, или на другую $vm\_map$ - \emph{подкарта} ($submap$). При использовании функции $fork$ для обеспечения $copy-on-write$ страниц виртуальной памяти используются \emph{объекты с тенью}. Тень объекта - другой $vm\_object$, который дает страницы для данного объекта при доступе.
+
+Для получения карты $vm\_map$ используем функцию $current\_map$ и производим ее парсинг. В заголовке карты находится первый элемент списка записи. Для каждой записи ищем объект и проверяем принадлежит ли он к файлу с удаленным хранилищем. При нахождении объекта подменяем указатель на новый $vm\_object$ с пустыми страницами. Структуры данных представлены в листинге \ref{fig:structvmmap}.
+
+\begin{lstlisting}[style=CStyle, caption={Структуры данных $vm\_map$}, label=fig:structvmmap]
+struct _vm_map {
+	lck_rw_t lock;
+	struct vm_map_header hdr;
+	...
+}
+
+struct vm_map_header {
+	struct vm_map_links	links; /* first, last, min, max */
+	int			nentries; /* Number of entries */
+	...
+};
+
+struct vm_map_links {
+	struct vm_map_entry	*prev;		/* previous entry */
+	struct vm_map_entry	*next;		/* next entry */
+	vm_map_offset_t		start;		/* start address */
+	vm_map_offset_t		end;		/* end address */
+};
+
+struct vm_map_entry {
+	struct vm_map_links	links;		/* links to other entries */
+
+	struct vm_map_store	store;
+	union vm_map_object	vme_object;	/* object I point to */
+	vm_object_offset_t	vme_offset;	/* offset into object */
+	...
+}
+
+typedef union vm_map_object {
+	vm_object_t		vmo_object;	/* object object */
+	vm_map_t		vmo_submap;	/* belongs to another map */
+} vm_map_object_t;
+\end{lstlisting}
 
 \chapter{Перехват VFS операций}
 \label{sec:genhook}
@@ -683,9 +734,24 @@ $arg3$ - код ошибки при $KAUTH\_RESULT\_DENY$.
 
 При работе с $Kauth$ необходимо помнить о фильтрации собственных запросов, в противном случае произойдет deadlock при попытке авторизовать действие под замком. Простейшее решение проблемы является фильтрация путей $vnode$. Подобное решения является допустимым, но имеет ряд очевидных недостатков. Во-первых, пути фильтрации могут пересекаться с другими файлами, например при фильтрации доступа к файлу $/var/db/data$ необходимо отсекать аутентификацию папки $/var/db$, что недопустимо в общем случае. Во-вторых, тривиальное решение имеет плохую расширяемость, если пути прописаны в исходном коде.
 
-Универсальное решение данной проблемы может быть использование новых $credential$, созданных $kext$ из существующих $kauth\_cred$ и $vfs\_context$. Получить $vfs\_context$ можно из функции $vfs\_kernel\_context$ и $kauth\_cred$ из $vfs\_context\_ucred$ для $vfs\_kernel\_context$. Доступ через полученные $credentials$ нужно фильтровать для защиты от deadlock.
+Универсальное решение данной проблемы может быть использование новых $credential$, созданных $kext$ из существующих $kauth\_cred$ и $vfs\_context$: будем называть такие контексты \emph{чистыми(Clean)}. Получить $vfs\_context$ можно из функции $vfs\_kernel\_context$ и $kauth\_cred$ из $vfs\_context\_ucred$ для $vfs\_kernel\_context$. Доступ через полученные $credentials$ нужно фильтровать для защиты от deadlock. Пример фильтрации представлен в листинге \ref{fig:kauthfilter}. Заметим, что подобный подход может быть применен только для запросов к локальному файловому хранилищу: для удаленных дисков(smbfs например) $root$ может иметь недостаточно прав для записи, в таком случае необходимо создавать множество чистых контекстов для разных точек монтирования.
 
-TODO - добавить пример
+\begin{lstlisting}[style=CStyle, caption={Фильтрация Kauth запросов}, label=fig:kauthfilter]
+typedef vfs_context {
+  thread_t thread;
+  kauth_cred_t cred;
+} vfs_context_t;
+
+void Prepare(vfs_context_t parent) {
+  vfs_context_t CleanCtx = vfs_context_create(parent);
+  kauth_cred_t CleanCred = kauth_cred_create(vfs_context_ucred(parent->cred));
+  CleanCtx->cred = CleanCred;
+}
+
+bool ShouldSkip(vfs_context_t ctx, kauth_cred_t cred) {
+  return ctx == CleanCtx || cred == CleanCred;
+}
+\end{lstlisting}
 
 \chapter{Представление виртуального файла}
 \section{Карта регионов}
@@ -982,59 +1048,6 @@ BlockRegions getUnreadRegions(vnode_t vp, BlockRegion regToRead)
   
   return unreadRegions;
 }
-\end{lstlisting}
-
-\chapter{Виртуальная память процесса}
-В этой главе будет рассмотрена часть реализации виртуальной памяти, относящейся к $mmap$ на файлы. Для работы с файлами в удаленным хранилищем необходимо предоставлять некоторым процессам доступ к файлам, но не подгружать данные. В виду кэширования страниц в $vm\_object$ нельзя отдавать невалидные страницы (смотреть \ref{sec:ubc}), поэтому было выбрано решение \emph{подмены} $vm\_object$ файла на $vm\_object$ с пустыми страницами.
-
-\section{Описание карты виртуальной памяти}
-Приложения для доступа к этому кэшу используют виртуальную память, адреса в которой отображается на $vm\_object\_t$ \emph{через карту виртуальной памяти} ($vm\_map\_t$). Схема карты показана на рисунке (\ref{fig:vmmap}).
-
-\begin{figure}[hhhhh!]
-\begin{center}
-\includegraphics[width=17cm]{fig/vmmap.png}
-\end{center}
-\vspace{-5mm}\caption{Карта виртуальной памяти процесса}
-\label{fig:vmmap}
-\end{figure}
-
-Карта состоит из списка записей. Запись определяет участок виртуальной памяти, к которому относятся адреса и указывает или на $vm\_object$ с страницами, или на другую $vm\_map$ - \emph{подкарта} ($submap$). При использовании функции $fork$ для обеспечения $copy-on-write$ страниц виртуальной памяти используются \emph{объекты с тенью}. Тень объекта - другой $vm\_object$, который дает страницы для данного объекта при доступе.
-
-Для получения карты $vm\_map$ используем функцию $current\_map$ и производим ее парсинг. В заголовке карты находится первый элемент списка записи. Для каждой записи ищем объект и проверяем принадлежит ли он к файлу с удаленным хранилищем. При нахождении объекта подменяем указатель на новый $vm\_object$ с пустыми страницами. Структуры данных представлены в листинге \ref{fig:structvmmap}.
-
-\begin{lstlisting}[style=CStyle, caption={Структуры данных $vm\_map$}, label=fig:structvmmap]
-struct _vm_map {
-	lck_rw_t lock;
-	struct vm_map_header hdr;
-	...
-}
-
-struct vm_map_header {
-	struct vm_map_links	links; /* first, last, min, max */
-	int			nentries; /* Number of entries */
-	...
-};
-
-struct vm_map_links {
-	struct vm_map_entry	*prev;		/* previous entry */
-	struct vm_map_entry	*next;		/* next entry */
-	vm_map_offset_t		start;		/* start address */
-	vm_map_offset_t		end;		/* end address */
-};
-
-struct vm_map_entry {
-	struct vm_map_links	links;		/* links to other entries */
-
-	struct vm_map_store	store;
-	union vm_map_object	vme_object;	/* object I point to */
-	vm_object_offset_t	vme_offset;	/* offset into object */
-	...
-}
-
-typedef union vm_map_object {
-	vm_object_t		vmo_object;	/* object object */
-	vm_map_t		vmo_submap;	/* belongs to another map */
-} vm_map_object_t;
 \end{lstlisting}
 
 \chapter{Структура UserSpace клиента}
