@@ -210,7 +210,7 @@ typedef struct vnode {
 \end{lstlisting}
 
 У каждой $vnode$ существуют два счетчика, которые отвечают за время жизни $vnode$ в памяти. $usecount$ - счетчик, обеспечивающий слабое наличие $vnode$ в системе, $vnode$ с положительным $usecount$ не может быть переиспользована для другого файла. Слабое наличие файла не гарантирует наличие данных, если файловая система должна быть отмонтирована, например $vnode$ может быть прописано состояние VNON и данные $vnode$ не могут быть больше использованы. $iocount$ гарантирует, что $vnode$ не только обязана соответствовать файлу, но и запрещено отмонтирование ФС пока $iocount$ не будет равен 0. Отсюда требование VFS заключается в том, что $iocount$ на $vnode$ может быть взят только на короткое время операций, такие как чтение или запись блока данных. Kext обязан опускать $iocount$ как только операции закончились, в противном случае система не может быть остановлена валидно.
-Для проверки переиспользования $vnode$ используется $v_id$, уникальный для данной vnode как указателя id, при изменении содержимого $vnode$ счетчик поднимается.
+Для проверки переиспользования $vnode$ используется $v\_id$, уникальный для данной vnode как указателя id, при изменении содержимого $vnode$ счетчик поднимается.
 
 $v\_mount$ и $v\_data$ отвечают за $mount$, к которому относится данная $vnode$ и для расщирения ядра являются непрозрачными(opaque) указателями. В данной работе особый интерес составляет поле $v\_op$, которое отвечает за доступ к функциям работы с $vnode$, принадлежащей к ядру. Как уже было замечено раньше, указатель $v\_op$ является постоянным для всех $vnode$ принадлежащих одной файловой системе. Для всех версия ядра от macOS 10.10 до macOS 10.14 сохраняется свойство последовательности полей $v\_op \rightarrow v\_mount \rightarrow v\_data$, которое может быть использовано для нахождения оффсета $v\_op$ в памяти. Более подробно поле $v\_op$ изучено в главе \ref{sec:vop}.
 
@@ -284,11 +284,11 @@ $UBC$ имеет доступные методы в $KPI$, которые позволяют регулировать кэширование
 \label{sec:memobject}
 Реализация VFS в операционной системе macOS очень близка к FreeBSD, но существует множество изменений, связанных в первую очередь с наличием подсистемы Mach, отвечающей за работу с памятью.
 
-Тип $memory\_object\_t$ является \emph{обобщенным (unified)} типом для любых обращений к памяти, в том числе к диску, далее \emph{Memory Object}. В $KPI$ $Memory\ Object$ является прозрачным указателем на структуру $memory_object$.
+Тип $memory\_object\_t$ является \emph{обобщенным (unified)} типом для любых обращений к памяти, в том числе к диску, далее \emph{Memory Object}. В $KPI$ $Memory\ Object$ является прозрачным указателем на структуру $memory\_object$.
 
 Работа с \emph{Memory Object} подразделена на 2 независимые компоненты, зависящие от источниках данных, $memory\_object$ и $memory\_object\_control$. Поля $mo\_ikot$ оставлены в структуре для поддержки работы  с $UserSpace$ клиентами. В объекте $memory\_object\_control$ поле $moc\_object$ отвечает за выделение памяти в ядре и не зависит от операций над $vnode$. Объект $memory\_object$ является зависимым от источника данных, управление ими осуществляется при помощи аналогинчых коллбэков.
 
-\begin{lstlisting}[style=CStyle, caption={Структура $memory\_object$}, label=fig:structmemoryobject]
+\begin{lstlisting}[style=CStyle, caption={Структура Memory Object}, label=fig:structmemoryobject]
 typedef struct 		memory_object {
   mo_ipc_object_bits_t			mo_ikot;
   const struct memory_object_pager_ops *mo_pager_ops;
@@ -316,7 +316,7 @@ typedef struct vnode_pager {
 
 TODO привести крутую картинку
 
-\subsection{Paging info}
+\subsection{Виртуальная память процесса}
 В этой секции будет рассмотрена часть реализации виртуальной памяти, относящейся к $mmap$ файлам. Для работы с файлами в удаленным хранилищем необходимо предоставлять некоторым процессам доступ к файлам, но не подгружать данные. В виду кэширования страниц в $vm\_object$ нельзя отдавать невалидные страницы (смотреть \ref{sec:ubc}), поэтому было выбрано решение \emph{подмены} $vm\_object$ файла на $vm\_object$ с пустыми страницами.
 
 Приложения для доступа к этому кэшу используют виртуальную память, адреса в которой отображается на $vm\_object\_t$ \emph{через карту виртуальной памяти} ($vm\_map\_t$). Схема карты показана на рисунке (\ref{fig:vmmap}).
@@ -472,67 +472,9 @@ VOPFUNC* get_vop(vnode_t vp)
 
 Рассмотрим скомпилированный код функции $VNOP\_CREATE$ в различных вариантах ядра $xnu$. В $release\ 10.14.2$ версии $amd64$ код ассемблера приведен в листинге \ref{fig:vopdisasrel}.
 
-\begin{lstlisting}[style=CStyle, caption={Дизассемблированный код $VNOP\_CREATE$, $release$ версия ядра}, label=fig:vopdisasrel]
- mov     rbp, rsp
- push    rbp
- ...
- push    rbx
- sub     rsp, 48h
- lea     rax, __stack_chk_guard
- mov     rax, [rax]
- mov     [rbp+__dtrace_args], rax
- mov     r15, r8
- mov     r12, rdx
- mov     rbx, rsi
- mov     r13, rdi
- lea     rax, vnop_create_desc kernels
- mov     [rbp+var_70], rax
- mov     [rbp+var_68], r13
- mov     [rbp+var_60], rbx
- mov     [rbp+var_58], r12
- mov     [rbp+var_50], rcx
- mov     [rbp+var_48], r15
- mov     rax, [r13+0xD0]
- movsxd  rcx, cs:vnop_create_desc.vdesc_offset
- lea     rdi, [rbp+var_7]
- call    qword ptr [rax+rcx*8]
-\end{lstlisting}
-
 Функций $VNOP\_CREATE$ получает информацию о таблице $v\_op$ через первый аргумент функции $dvp$. В соглашении о вызовах \emph{System V AMD64 ABI} принято передавать первый аргумент через параметр $rdi$. Будем следить за регистрами в которые будет перемещено значение $rdi$. Легко увидеть, что такими регистрами являются только $r13$ и $rdi$. Далее для получения значения $v\_op$ используется инструкция mov rax, [r13+0xD0] и искомое значения смещения является 0xD0. Отсюда требуется найти инструкцию вида mov REG0, [REG1+OFFSET], где REG1 - регистр, за которым производится наблюдение. Далее по коду можно увидеть вызов функции $create$ из таблицы call qword ptr [rax+rcx*8], что является подтверждением корректности.
 
 Теперь рассмотрим ту же функцию $VNOP\_CREATE$ в ядре $debug\ 10.13.6$. $Debug$ версии $xnu$ имеют существенное большее число проверок и являются менее оптимизированными, но подобный код упрощает отладку ядра с символами. Листинг приведен в \ref{fig:vopdisasdebug}.
-
-\begin{lstlisting}[style=CStyle, caption={Дизассемблированный код $VNOP\_CREATE$, $debug$ версия ядра}, label=fig:vopdisasdebug]
- push    rbp
- mov     rbp, rsp
- sub     rsp, 80h
- lea     rax, [rbp+var_70]
- lea     r9, _vnop_create_desc
- lea     r10, ___stack_chk_guard
- mov     r10, [r10]
- mov     [rbp+var_8], r10
- mov     [rbp+var_18], rdi
- mov     [rbp+var_20], rsi
- mov     [rbp+var_28], rdx
- mov     [rbp+var_30], rcx
- mov     [rbp+var_38], r8
- mov     [rbp+var_70], r9
- mov     rcx, [rbp+var_18]
- mov     [rbp+var_68], rcx
- mov     rcx, [rbp+var_20]
- mov     [rbp+var_60], rcx
- mov     rcx, [rbp+var_28]
- mov     [rbp+var_58], rcx
- mov     rcx, [rbp+var_30]
- mov     [rbp+var_50], rcx
- mov     rcx, [rbp+var_38]
- mov     [rbp+var_48], rcx
- mov     rcx, [rbp+var_18]
- mov     rcx, [rcx+0D0h]
- movsxd  rdx, dword ptr [r9]
- mov     rcx, [rcx+rdx*8]
- call    rcx
-\end{lstlisting}
 
 Для сохранения отладочной информации данные сохраняются не только в регистрах, но и на стеке, поэтому необходимо следить за перемещениями переменной $rdi$ на стеке тоже. Будем обозначать переменные на стеке как $rdp+OFFSET$. Легко увидеть, что используемые переменные будут $rdi$, $rbp+0x18$, $rcx$ (временно), $rbp+0x68$, $rcx$. Искомая инструкция аналогична $release$ случаю. Также заметим, что подтверждающая инструкция требует поддержки загрузки эффективного указателя $lea$, которая используется для загрузки $vnop\_create\_desc$.
 
@@ -607,7 +549,57 @@ MOV RAX, [RDI + o]
 \label{tbl:deref}
 \end{table}
 
-Подобный способ является более надежным, чем предположение о фиксированности поля $v\_mount$, однако требует эмуляции функции и рассчитывает на ограниченный круг используемых функций $mov$ и $lea$ в данном случае. Расширение поддерживаемых инструкций эмуляции, например обнуление регистра при помощи $xor$, может дать более точные результаты.
+Подобный способ является более надежным, чем предположение о фиксированности поля $v\_mount$, однако требует эмуляции функции и рассчитывает на ограниченный круг используемых функций $mov$ и $lea$ в данном случае. Расширение поддерживаемых инструкций эмуляции, например обнуление регистра при помощи $xor$, может дать более точные результаты. Пример реализации эмуляции функции приведен в листинге \ref{fig:funcemu}.
+
+\begin{lstlisting}[style=CStyle, caption={Пример эмуляции функции при помощи distorm3}, label=fig:funcemu]
+void EmulateFunction(void* code, int codeLen, int depth,
+  void* ctx, EAInitCallback init, EAStepCallback step)
+{
+  _CodeInfo ci = {
+    .code = (unsigned char*) code, .codeOffset = (_OffsetType) code,
+    .codeLen = codeLen, .dt = Decode64Bits, .features = DF_NONE,
+  };
+
+  EmulateDerefs* derefs = new EmulateDerefs[depth];
+  for (int i = 0; i < depth; i++) for (int j = 0; j < 16; j++)
+      derefs[i][j] = { -1 };
+
+  init(&ci, ctx, derefs); // Setup derefs like derefs[0][R_RDI] = 0;
+
+  while (ci.codeLen != 0) {
+    _DInst inst; unsigned int count = 0;
+    _DecodeResult res = distorm_decompose(&ci, &inst, 1, &count);
+    if (res != DECRES_SUCCESS && res != DECRES_MEMORYERR) break;
+    if (count == 0 || inst.flags == FLAG_NOT_DECODABLE) break;
+  
+    switch (inst.opcode) {
+      // Only one example - MOV RAX, RDI
+      case I_MOV: {
+        _Operand op0 = inst.ops[0]; _Operand op1 = inst.ops[1];
+        if (op0.type == O_NONE || op1.type == O_NONE) break;
+
+        if (op0.type == O_REG && op1.type == O_REG) {
+          // Only 64-bit
+          if (op0.index > R_R15 || op1.index > R_R15) break;
+          // Setup dynprog table shift
+          for (int i = 0; i < depth; i++) {
+            if (derefs[i][op1.index].localOffset != -1)
+              derefs[i][op0.index] = derefs[i][op1.index];
+            else
+              derefs[i][op0.index].localOffset = -1;
+          }
+        }
+    }
+    
+    // Might be check like inst.opcode == I_CALL to STOP
+    if (step(&ci, &inst, ctx, derefs) == EA_STOP) break;
+    _OffsetType o = ci.nextOffset - ci.codeOffset;
+    ci.code += o; ci.codeLen -= o; ci.codeOffset = ci.nextOffset;
+  }
+
+  delete[] derefs;
+}
+\end{lstlisting}
 
 \section{KAUTH авторизация}
 \label{sec:kauth}
@@ -753,6 +745,9 @@ bool ShouldSkip(vfs_context_t ctx, kauth_cred_t cred) {
 }
 \end{lstlisting}
 
+\subsubsection{Использование Kauth}
+Из описания Kauth было показано, что \emph{до} чтения файла, необходимо произвести авторизацию, поэтому $Vnode\ Scope\ Listener$ может быть использован для получения $vnode$, в которую нужно произвести вставку $VOP$. Этот же $listener$ может ограничивать доступ к файлу для нежелательный процессоа, смотреть секцию \ref{sec:fakeread}.
+
 \chapter{Представление виртуального файла}
 \section{Карта регионов}
 \label{sec:blockregions}
@@ -896,7 +891,7 @@ void merge(BlockRegion* victim)
 \begin{center}
 \includegraphics[width=17cm]{fig/regionsadd.png}
 \end{center}
-\vspace{-5mm}\caption{Варианты для добавления нового региона}
+\vspace{-5mm}\caption{Варианты добавления нового региона}
 \label{fig:regionadd}
 \end{figure}
 
@@ -1157,6 +1152,7 @@ void ListenToEvents(io_connection_t connection)
 /// Sync header
 struct SyncMsg {
   uintptr_t ptrSelf;
+  uintptr_t mutex;
   uintptr_t time;
 };
 
@@ -1207,24 +1203,23 @@ struct DownloadRequestMsg
 Опишем дополнительное методы управления $kext$. Для сохранения информации о регионах файла добавим функции для доступа в расширенным атрибутам или к \emph{per vnodе} хранилищу. $Kext$ также будет кэшировать информацию о статусе файла, обеспечим доступ к кэшу через функции $addToCache$ и $removeFromCache$. Для изменения содержимого файла со стороны клиента дадим функции блокировки операций чтения и записи $lockFileRead$ и $lockFileWrite$. Для очистки кэша после дегидрации, введем метод для удаления $UBC$ кэша $invalidateVnodeCache$.
 
 \chapter{Имплементация и производительность}
-\label{sec:reqresp}
+\label{sec:impl}
 \section{Связи объектов}
 В данной работе $userspace$ процесс не будет рассматриваться конкретно в виду его сложности с точки зрения работы с данными. $Kext$ будет состоять из нескольких классов и их отношениях. Схема связей классов представлена на рисунке \ref{fig:classimpl}.
 
 \begin{figure}[hhhhh!]
 \begin{center}
-\includegraphics[width=13.5cm]{fig/impl.png}
+\includegraphics[width=17cm]{fig/impl2.png}
 \end{center}
 \vspace{-5mm}\caption{Схема классов}
 \label{fig:classimpl}
 \end{figure}
 
-При авторизации чтения из файла на $VnodeOp$ коллбэке в $KauthFilter$ необходимого файла производится проверка является ли файл виртуальным. Если файл виртуальный и его таблица $VOP$ не перехвачена, производится ее перехват. На операции чтения из файла, в $File\ Manager$ отправляется регион чтения. При помощи методов $Block\ Region$ находится та часть файла, которую необходимо скачать с удаленного хранилища. Если пересечение не пусто, отправляется синхронный запрос $UserSpace$ клиенту и ожидается пока в файл не будут записаны данные. На операции $pagein$ в случае необходимости производится итерация по списку записей карты виртуальной памяти и подменяется $vm\_object$.
+При авторизации чтения из файла на $VnodeOp$ коллбэке в $KauthFilter$ производится проверка является ли файл виртуальным. Если файл виртуальный, запрос отправляется в \emph{Filter Manager}, который в порядке приоритетов вызывает фильтры. \emph{VOP Hook Filter} проверяет перехвачена ли таблица $VOP$ и производит ее перехват. \emph{Process Exclusion Filter} проверять может ли процесс производить чтение файла и может заблокировать доступ нежелательных процессов. На операции $pagein$ в случае необходимости производится итерация по списку записей карты виртуальной памяти и подменяется $vm\_object$. \emph{Client} при помощи методов $Block\ Region$ находится ту часть файла, которую необходимо скачать с удаленного хранилища. Если пересечение не пусто, отправляется синхронный запрос $UserSpace$ клиенту и ожидается пока в файл не будут записаны данные.
 
-Исходный код решения представлен в приложении 1 дипломной работы.
-
+\iffalse
 \section{Схема потока данных}
-\label{sec:reqresp}
+\label{sec:dataflow}
 Структура сообщений, отправляемая пользовательскому приложению представлена в листинге \ref{fig:msgkext}. Для уменьшения количества отправляемых сообщений будем округлять размеры чтения регионов чтения. Рассмотрим два случая:
 
 \begin{enumerate}
@@ -1233,9 +1228,10 @@ struct DownloadRequestMsg
 \end{enumerate}
 
 Будем считать, что количество считанных байт равно $Count$, размер блока равен $Block$. Количество сообщений, отправленных в $userspace$ равно примерно $Count/Block$. Количество отправленных данных равно $Count/Block * sizeof(DownloadRequestMsg)$.
+\fi
 
 \section{Защита от фиктивного чтения}
-\label{sec:reqresp}
+\label{sec:fakeread}
 Наибольшая проблема наличия виртуальных файлов в системе - их \emph{фиктивное чтение}. Процессы, которые производят индексацию локальных файлов рассчитывают, что содержимое любых файлов является постоянным и чтение безопасно. Для виртуальных файлов подобное чтение является недопустимым, так как оно порождает полную выгрузку файла с удаленного хранилища.
 
 \subsection{Списки фильтрации приложений}
@@ -1267,9 +1263,9 @@ struct	proc {
 
 Начальную фильтрацию можно производить при помощи \emph{имени} процесса $p\_comm$, но в системе может быть запускаемый файл с таким же именем, что будет порождать \emph{false positive}. В структуре процесса также записана $vnode$, которая имеет в себе данные о запущенном приложении. Фильтрация по имени является достаточным признаком процесса, но является дорогостоящей операцией. Для уменьшения нагрузки можно использовать свойство уникальности файла в системе по 64-битному полю $vnode\ id$ и 32-битному $device\ id$, вместе образующие 96-битный уникальный ключ $file\ id$.
 
-Для нахождения $file\ id$ в ядре достаточно открыть файл с необходимым именем, например \emph{/usr/bin/mdworker}, и получить его атрибуты, смотреть (\ref{fig:structfileid}).
+Для нахождения $file\ id$ в ядре достаточно открыть файл с необходимым именем, например \emph{/System/Library/.../mdworker}, и получить его атрибуты, смотреть (\ref{fig:structfileid}).
 
-\begin{lstlisting}[style=CStyle, caption={Структура процесса}, label=fig:structfileid]
+\begin{lstlisting}[style=CStyle, caption={Метод получения $FileId$}, label=fig:structfileid]
 struct FileId
 {
   uint32_t devId;
@@ -1301,7 +1297,60 @@ FileId getFileId(vnode_t vp, vfs_context_t ctx)
 \bibliographystyle{gost2008}
 \bibliography{thesis}
 
-%\appendix
-%\input{app-a}
+\appendix
+\chapter{Ассемблерные листинги функций XNU}
+
+\begin{lstlisting}[style=CStyle, caption={Дизассемблированный код $VNOP\_CREATE$, $release$ версия ядра}, label=fig:vopdisasrel]
+ mov     rbp, rsp
+ push    rbp
+ ...
+ push    rbx
+ sub     rsp, 48h
+ lea     rax, __stack_chk_guard
+ mov     rax, [rax]
+ mov     [rbp+__dtrace_args], rax
+ mov     r15, r8
+ mov     r12, rdx
+ mov     rbx, rsi
+ mov     r13, rdi
+ lea     rax, vnop_create_desc kernels
+ mov     [rbp+var_70], rax
+ mov     [rbp+var_68], r13
+ mov     [rbp+var_60], rbx
+ mov     [rbp+var_58], r12
+ mov     [rbp+var_50], rcx
+ mov     [rbp+var_48], r15
+ mov     rax, [r13+0xD0]
+ movsxd  rcx, cs:vnop_create_desc.vdesc_offset
+ lea     rdi, [rbp+var_7]
+ call    qword ptr [rax+rcx*8]
+\end{lstlisting}
+
+
+\begin{lstlisting}[style=CStyle, caption={Дизассемблированный код $VNOP\_CREATE$, $debug$ версия ядра}, label=fig:vopdisasdebug]
+ mov     rbp, rsp
+ push    rbp
+ ...
+ push    rbx
+ sub     rsp, 48h
+ lea     rax, __stack_chk_guard
+ mov     rax, [rax]
+ mov     [rbp+__dtrace_args], rax
+ mov     r15, r8
+ mov     r12, rdx
+ mov     rbx, rsi
+ mov     r13, rdi
+ lea     rax, vnop_create_desc kernels
+ mov     [rbp+var_70], rax
+ mov     [rbp+var_68], r13
+ mov     [rbp+var_60], rbx
+ mov     [rbp+var_58], r12
+ mov     [rbp+var_50], rcx
+ mov     [rbp+var_48], r15
+ mov     rax, [r13+0xD0]
+ movsxd  rcx, cs:vnop_create_desc.vdesc_offset
+ lea     rdi, [rbp+var_7]
+ call    qword ptr [rax+rcx*8]
+\end{lstlisting}
 
 \end{document}
