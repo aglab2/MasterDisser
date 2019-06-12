@@ -81,6 +81,15 @@
 \end{tikzpicture}%
 }
 
+\newcommand{\signature}[2][18em]{%
+  \hspace{-20em}
+  \begin{tabular}[t]{ p{#1} p{#1} }
+    \raisebox{-.5ex}[0pt][0pt]{\bfseries } & \\
+    \cline{2-2}
+    & \centering\scriptsize\itshape (#2)
+  \end{tabular}
+}
+
 \begin{document}
 
 \institution{Московский Физико-Технический Институт (ГУ)}
@@ -123,8 +132,49 @@
 \city{Москва}
 \date{\number\year}
 
-\maketitle
+%\maketitle
+{\small
+\begin{center}
+Федеральное государственное автономное образовательное учреждение высшего образования \\
+«Московский физико-технический институт (национальный исследовательский университет)» \\
+Факультет управления и прикладной математики \\
+Кафедра теоретической и прикладной информатики \\
+\end{center}
 
+\noindent
+\textbf{Направление подготовки:} 03.04.01 Прикладные математика и физика \\
+\textbf{Направленность (профиль) подготовки:} Математические и информационные технологии 
+
+\topskip0pt
+\vspace*{\fill}
+\begin{center}
+\begin{minipage}{0.8\linewidth}
+\begin{center}
+\noindent
+\textbf{ПЕРЕХВАТ ФАЙЛОВЫХ ОПЕРАЦИЙ ДЛЯ СОЗДАНИЯ ВИРТУАЛЬНЫХ SPARSE-ФАЙЛОВ С УДАЛЕННЫМ ХРАНИЛИЩЕМ В ОПЕРАЦИОННОЙ СИСТЕМЕ MACOS} \\
+{(магистерская диссертация)}
+\end{center}
+\end{minipage}
+\end{center}
+\vspace*{\fill}
+
+\hfill\begin{minipage}{0.5\linewidth}
+\textbf{Студент:} \\
+Копырин Денис Валерьевич \\
+
+\signature{подпись студента}
+\textbf{Научный Руководитель:} \\
+д-р физ.-мат. наук, профессор \\
+Тормасов Александр Геннадьевич \\
+
+\hspace{1.8em}\signature{подпись научного руководителя}
+\end{minipage}
+
+\vspace*{\fill} 
+\begin{center}
+Москва 2019
+\end{center}
+}
 \tableofcontents
 
 \intro
